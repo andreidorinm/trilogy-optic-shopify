@@ -30,14 +30,25 @@ let authenticatedCookies = null;
 let cookieExpiry = null;
 
 async function getBrowser() {
-  if (!browserInstance) {
-    browserInstance = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-    });
+    if (!browserInstance) {
+      browserInstance = await puppeteer.launch({
+        headless: 'new',
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--disable-software-rasterizer',
+          '--disable-dev-tools',
+          '--no-first-run',
+          '--no-zygote',
+          '--single-process'
+        ]
+      });
+    }
+    return browserInstance;
   }
-  return browserInstance;
-}
 
 async function getAuthenticatedCookies() {
   if (authenticatedCookies && cookieExpiry && Date.now() < cookieExpiry) {
