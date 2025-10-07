@@ -29,60 +29,179 @@ let browserInstance = null;
 let authenticatedCookies = null;
 let cookieExpiry = null;
 
-async function getBrowser() {
-    if (!browserInstance) {
-      browserInstance = await puppeteer.launch({
-        headless: 'new',
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-gpu',
-          '--disable-software-rasterizer',
-          '--disable-dev-tools',
-          '--no-first-run',
-          '--no-zygote',
-          '--single-process'
-        ]
-      });
-    }
-    return browserInstance;
-  }
-
 async function getAuthenticatedCookies() {
   if (authenticatedCookies && cookieExpiry && Date.now() < cookieExpiry) {
     console.log('✓ Using cached cookies');
     return authenticatedCookies;
   }
 
-  const browser = await getBrowser();
-  const page = await browser.newPage();
+  let browser = null;
+  let page = null;
 
   try {
     console.log('🔐 Authenticating with Shopify...');
-    await page.goto(`${STORE_URL}/password`, { waitUntil: 'networkidle2', timeout: 30000 });
-    await page.waitForSelector('input[name="password"]', { timeout: 5000 });
-    await page.type('input[name="password"]', PASSWORD);
+    browser = await getBrowser();
+    page = await browser.newPage();
     
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }),
-      page.keyboard.press('Enter')
-    ]);
+    // Set a smaller viewport to save resources
+    await page.setViewport({ width: 1280, height: 720 });
+    
+    // Set longer timeout
+    page.setDefaultTimeout(60000); // 60 seconds
+    page.setDefaultNavigationTimeout(60000);
 
+    console.log('📄 Navigating to password page...');
+    await page.goto(`${STORE_URL}/password`, { 
+      waitUntil: 'domcontentloaded', // Changed from networkidle2 - faster!
+      timeout: 60000 
+    });
+    
+    console.log('🔍 Waiting for password field...');
+    await page.waitForSelector('input[name="password"]', { timeout: 10000 });
+    
+    console.log('✍️  Typing password...');
+    await page.type('input[name="password"]', PASSWORD, { delay: 50 });
+    
+    console.log('📤 Submitting form...');
+    
+    // Click submit button instead of pressing Enter
+    const submitButton = await page.$('button[type="submit"], input[type="submit"]');
+    if (submitButton) {
+      await Promise.all([
+        page.waitForNavigation({ 
+          waitUntil: 'domcontentloaded',
+          timeout: 60000 
+        }),
+        submitButton.click()
+      ]);
+    } else {
+      // Fallback to Enter key
+      await Promise.all([
+        page.waitForNavigation({ 
+          waitUntil: 'domcontentloaded',
+          timeout: 60000 
+        }),
+        page.keyboard.press('Enter')
+      ]);
+    }
+
+    console.log('🍪 Getting cookies...');
     const cookies = await page.cookies();
+    
+    if (!cookies || cookies.length === 0) {
+      throw new Error('No cookies received - login may have failed');
+    }
+    
     await page.close();
 
     authenticatedCookies = cookies;
     cookieExpiry = Date.now() + (30 * 60 * 1000);
 
-    console.log('✅ Authenticated with Shopify');
+    console.log('✅ Authenticated with Shopify - Got', cookies.length, 'cookies');
     return authenticatedCookies;
+    
   } catch (error) {
-    await page.close();
+    console.error('❌ Auth error:', error.message);
+    
+    // Clean up
+    if (page && !page.isClosed()) {
+      try {
+        await page.close();
+      } catch (e) {
+        console.error('Error closing page:', e.message);
+      }
+    }
+    
     throw error;
   }
 }
+
+async function getAuthenticatedCookies() {
+    if (authenticatedCookies && cookieExpiry && Date.now() < cookieExpiry) {
+      console.log('✓ Using cached cookies');
+      return authenticatedCookies;
+    }
+  
+    let browser = null;
+    let page = null;
+  
+    try {
+      console.log('🔐 Authenticating with Shopify...');
+      browser = await getBrowser();
+      page = await browser.newPage();
+      
+      // Set a smaller viewport to save resources
+      await page.setViewport({ width: 1280, height: 720 });
+      
+      // Set longer timeout
+      page.setDefaultTimeout(60000); // 60 seconds
+      page.setDefaultNavigationTimeout(60000);
+  
+      console.log('📄 Navigating to password page...');
+      await page.goto(`${STORE_URL}/password`, { 
+        waitUntil: 'domcontentloaded', // Changed from networkidle2 - faster!
+        timeout: 60000 
+      });
+      
+      console.log('🔍 Waiting for password field...');
+      await page.waitForSelector('input[name="password"]', { timeout: 10000 });
+      
+      console.log('✍️  Typing password...');
+      await page.type('input[name="password"]', PASSWORD, { delay: 50 });
+      
+      console.log('📤 Submitting form...');
+      
+      // Click submit button instead of pressing Enter
+      const submitButton = await page.$('button[type="submit"], input[type="submit"]');
+      if (submitButton) {
+        await Promise.all([
+          page.waitForNavigation({ 
+            waitUntil: 'domcontentloaded',
+            timeout: 60000 
+          }),
+          submitButton.click()
+        ]);
+      } else {
+        // Fallback to Enter key
+        await Promise.all([
+          page.waitForNavigation({ 
+            waitUntil: 'domcontentloaded',
+            timeout: 60000 
+          }),
+          page.keyboard.press('Enter')
+        ]);
+      }
+  
+      console.log('🍪 Getting cookies...');
+      const cookies = await page.cookies();
+      
+      if (!cookies || cookies.length === 0) {
+        throw new Error('No cookies received - login may have failed');
+      }
+      
+      await page.close();
+  
+      authenticatedCookies = cookies;
+      cookieExpiry = Date.now() + (30 * 60 * 1000);
+  
+      console.log('✅ Authenticated with Shopify - Got', cookies.length, 'cookies');
+      return authenticatedCookies;
+      
+    } catch (error) {
+      console.error('❌ Auth error:', error.message);
+      
+      // Clean up
+      if (page && !page.isClosed()) {
+        try {
+          await page.close();
+        } catch (e) {
+          console.error('Error closing page:', e.message);
+        }
+      }
+      
+      throw error;
+    }
+  }
 
 // Landing page with auto-auth
 app.get('/', async (req, res) => {
