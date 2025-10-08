@@ -151,6 +151,19 @@ async function regenerateLink() {
       fs.writeFileSync('page-debug.html', pageHtml);
       console.log('📄 Saved HTML to page-debug.html\n');
       
+      // Try to find any trilogyoptic.com links
+      console.log('🔍 Searching for any trilogyoptic.com links...');
+      const allTrilogyLinks = pageHtml.match(/https?:\/\/[^"'\s]*trilogyoptic\.com[^"'\s]*/gi);
+      if (allTrilogyLinks && allTrilogyLinks.length > 0) {
+        console.log(`Found ${allTrilogyLinks.length} trilogyoptic.com link(s):`);
+        allTrilogyLinks.slice(0, 5).forEach((link, i) => {
+          console.log(`  ${i + 1}. ${link.substring(0, 120)}...`);
+        });
+        console.log('');
+      } else {
+        console.log('  No trilogyoptic.com links found at all!\n');
+      }
+      
       // Show snippet
       console.log('HTML snippet (first 500 chars):');
       console.log(pageHtml.substring(0, 500));
