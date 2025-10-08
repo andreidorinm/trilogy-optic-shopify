@@ -1,195 +1,202 @@
-const axios = require('axios');
+const puppeteer = require('puppeteer');
 const fs = require('fs');
+require('dotenv').config();
 
 async function regenerateLink() {
-  console.log('🚀 Using Browserless BrowserQL (GraphQL) - Best anti-detection...\n');
+  console.log('🚀 Starting local Puppeteer automation...\n');
   
-  const browserlessToken = process.env.BROWSERLESS_TOKEN;
   const cookiesJson = process.env.SHOPIFY_COOKIES;
   
-  if (!browserlessToken || !cookiesJson) {
-    throw new Error('Missing environment variables');
+  if (!cookiesJson) {
+    throw new Error('Missing SHOPIFY_COOKIES in .env');
   }
   
-  console.log('✅ Environment variables loaded\n');
+  const cookies = JSON.parse(cookiesJson);
+  
+  // Filter valid cookies
+  const now = Date.now() / 1000;
+  const validCookies = cookies
+    .filter(c => !c.session && (!c.expirationDate || c.expirationDate >= now))
+    .map(c => ({
+      name: c.name,
+      value: c.value,
+      domain: c.domain.startsWith('.') ? c.domain : '.' + c.domain,
+      path: c.path || '/',
+      expires: c.expirationDate ? Math.floor(c.expirationDate) : undefined,
+      httpOnly: c.httpOnly || false,
+      secure: c.secure || false,
+      sameSite: c.sameSite || 'Lax'
+    }));
+  
+  console.log(`🍪 Loaded ${validCookies.length} cookies\n`);
+  
+  const browser = await puppeteer.launch({
+    headless: false,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-blink-features=AutomationControlled'
+    ]
+  });
   
   try {
-    const cookies = JSON.parse(cookiesJson);
+    const page = await browser.newPage();
     
-    // Normalize cookies
-    const browserlessCookies = cookies.map(c => {
-      let sameSite = 'Lax';
-      if (c.sameSite) {
-        const normalized = c.sameSite.toLowerCase();
-        if (['lax', 'strict', 'none'].includes(normalized)) {
-          sameSite = normalized.charAt(0).toUpperCase() + normalized.slice(1);
-        }
-      }
-      
-      return {
-        name: c.name,
-        value: c.value,
-        domain: c.domain,
-        path: c.path || '/',
-        expires: c.expirationDate,
-        httpOnly: c.httpOnly || false,
-        secure: c.secure || false,
-        sameSite: sameSite
-      };
+    // Set cookies
+    await page.setCookie(...validCookies);
+    console.log('✅ Cookies set\n');
+    
+    // Navigate to Shopify admin themes page
+    console.log('🌐 Navigating to themes page...');
+    await page.goto('https://admin.shopify.com/store/trilogyopticdemo/themes', {
+      waitUntil: 'networkidle2',
+      timeout: 60000
     });
     
-    console.log('🌐 Calling Browserless BrowserQL endpoint...');
+    console.log('📸 Taking screenshot 1...');
+    await page.screenshot({ path: 'step1-before-click.png' });
     
-    // Add proxy parameters if needed (uncomment to enable residential proxy)
-    const useProxy = false; // Set to true if bot detection is an issue
-    const proxyParams = useProxy ? '&proxy=residential&proxyCountry=us' : '';
-    
-    const response = await axios.post(
-      `https://production-sfo.browserless.io/chromium/bql?token=${browserlessToken}${proxyParams}`,
-      {
-        query: `
-          mutation GetPageContent($url: String!, $cookies: [CookieInput!]!) {
-            setCookies: cookies(cookies: $cookies) {
-              cookies {
-                name
-                value
-              }
-            }
-            goto(
-              url: $url
-              waitUntil: networkIdle
-              timeout: 60000
-            ) {
-              status
-              url
-            }
-            waitForTimeout(time: 5000) {
-              time
-            }
-            scroll: evaluate(
-              content: """
-                (()=>{
-                  window.scrollTo(0, document.body.scrollHeight / 2);
-                  return true;
-                })()
-              """
-            ) {
-              value
-            }
-            waitForTimeout2: waitForTimeout(time: 2000) {
-              time
-            }
-            extractLink: evaluate(
-              content: """
-                (()=>{
-                  return new Promise((resolve) => {
-                    let attempts = 0;
-                    const maxAttempts = 80;
-                    
-                    const checkForLink = () => {
-                      attempts++;
-                      
-                      const links = document.querySelectorAll('a[href*=\"trilogyoptic.com\"]');
-                      
-                      if (links.length > 0) {
-                        console.log('Found link after ' + attempts + ' attempts');
-                        resolve(links[0].href);
-                      } else if (attempts >= maxAttempts) {
-                        console.log('No link found after ' + maxAttempts + ' attempts');
-                        const allLinks = document.querySelectorAll('a');
-                        console.log('Total links on page: ' + allLinks.length);
-                        resolve(null);
-                      } else {
-                        setTimeout(checkForLink, 500);
-                      }
-                    };
-                    
-                    checkForLink();
-                  });
-                })()
-              """
-            ) {
-              value
-            }
-          }
-        `,
-        variables: {
-          url: 'https://admin.shopify.com/store/trilogyopticdemo/themes',
-          cookies: browserlessCookies
-        }
-      },
-      {
-        timeout: 120000,
-        headers: {
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache'
-        }
-      }
+    // Wait for the page to be interactive
+    console.log('⏳ Waiting for page to be ready...');
+    await page.waitForFunction(
+      () => document.readyState === 'complete',
+      { timeout: 30000 }
     );
     
-    console.log('📦 Response received\n');
+    // CRITICAL: Set up listeners BEFORE clicking to catch the temporary URL
+    let capturedLink = null;
+    let capturedFromPopup = null;
     
-    // Check for errors
-    if (response.data.errors) {
-      console.error('❌ GraphQL errors:', JSON.stringify(response.data.errors, null, 2));
-      throw new Error('GraphQL query failed');
-    }
-    
-    const result = response.data.data;
-    const bypassLink = result.extractLink?.value;
-    const status = result.goto?.status;
-    const finalUrl = result.goto?.url;
-    
-    console.log(`📄 Page status: ${status}`);
-    console.log(`🌐 Final URL: ${finalUrl}\n`);
-    
-    if (!bypassLink || bypassLink === 'null') {
-      console.log('❌ No bypass link found after waiting 30 seconds\n');
-      console.log('The page loaded but the link never appeared.');
-      console.log('This could mean:');
-      console.log('  1. The theme is not published/available');
-      console.log('  2. The cookies need refreshing');
-      console.log('  3. The page structure changed\n');
-      throw new Error('Bypass link not found');
-    }
-    
-    console.log('✅ Bypass link extracted!');
-    console.log(`🔗 ${bypassLink.substring(0, 100)}...\n`);
-    
-    // Validate link
-    if (!bypassLink.includes('trilogyoptic.com')) {
-      throw new Error('Invalid link - missing store domain');
-    }
-    
-    // Check expiration
-    try {
-      const urlParams = new URLSearchParams(new URL(bypassLink).search);
-      const bt = urlParams.get('_bt');
-      if (bt) {
-        const decoded = JSON.parse(Buffer.from(bt.split('--')[0], 'base64').toString());
-        const expiryDate = new Date(decoded._rails.exp);
-        const minutesLeft = Math.floor((expiryDate - Date.now()) / (1000 * 60));
-        console.log('📅 Expires:', expiryDate.toLocaleString('es-ES'));
-        console.log(`⏰ Valid for: ${minutesLeft} minutes\n`);
+    // Listen for new pages/tabs (popups)
+    browser.on('targetcreated', async (target) => {
+      if (target.type() === 'page') {
+        console.log('🔔 New page/popup detected!');
+        const newPage = await target.page();
+        const url = newPage.url();
+        console.log('🔗 Popup URL:', url);
+        
+        if (url.includes('_bt=')) {
+          capturedFromPopup = url;
+          console.log('✅ CAPTURED LINK FROM POPUP!');
+        }
       }
+    });
+    
+    // Listen for URL changes on the current page
+    page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame()) {
+        const url = frame.url();
+        console.log('🔄 URL changed to:', url);
+        
+        if (url.includes('_bt=') && !capturedLink) {
+          capturedLink = url;
+          console.log('✅ CAPTURED LINK FROM NAVIGATION!');
+        }
+      }
+    });
+    
+    // Listen for request interception (catch the redirect)
+    await page.setRequestInterception(true);
+    page.on('request', (request) => {
+      const url = request.url();
+      if (url.includes('_bt=') && !capturedLink) {
+        capturedLink = url;
+        console.log('✅ CAPTURED LINK FROM REQUEST:', url);
+      }
+      request.continue();
+    });
+    
+    // Try to find the View store button
+    console.log('🔍 Looking for "View your online store" button...');
+    
+    let buttonSelector = null;
+    
+    // Strategy 1: Try aria-label
+    try {
+      await page.waitForSelector('button[aria-label*="View"]', { timeout: 5000 });
+      buttonSelector = 'button[aria-label*="View"]';
+      console.log('✅ Found button by aria-label');
     } catch (e) {
-      console.log('ℹ️  No _bt expiration data\n');
+      console.log('⚠️  Button not found by aria-label, trying text content...');
     }
     
-    // Update HTML file
-    updateHtmlFile(bypassLink);
+    // Strategy 2: Try by text content
+    if (!buttonSelector) {
+      buttonSelector = await page.evaluate(() => {
+        const buttons = Array.from(document.querySelectorAll('button, a'));
+        const viewButton = buttons.find(btn => {
+          const text = btn.textContent || btn.getAttribute('aria-label') || '';
+          return text.toLowerCase().includes('view') && 
+                 text.toLowerCase().includes('store');
+        });
+        
+        if (viewButton) {
+          viewButton.setAttribute('data-view-store', 'true');
+          return '[data-view-store="true"]';
+        }
+        return null;
+      });
+    }
+    
+    if (buttonSelector) {
+      console.log(`✅ Found button with selector: ${buttonSelector}\n`);
+      console.log('🎯 Now clicking and listening for the link...\n');
+      
+      // Click the button
+      await page.click(buttonSelector);
+      console.log('🖱️  Clicked button!');
+      
+      // Wait a moment for the link to be captured
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      console.log('📸 Taking screenshot 2...');
+      await page.screenshot({ path: 'step2-after-click.png' });
+      
+      // Check what we captured
+      const finalLink = capturedFromPopup || capturedLink;
+      
+      if (finalLink) {
+        console.log('\n🎉 SUCCESS! Captured the bypass link!');
+        console.log(`🔗 ${finalLink}\n`);
+        updateHtmlFile(finalLink);
+      } else {
+        console.log('\n⚠️  No link captured by listeners. Trying manual extraction...\n');
+        
+        // Fallback: check page content
+        const html = await page.content();
+        fs.writeFileSync('page-content.html', html);
+        
+        const btMatch = html.match(/(https?:\/\/[^"'\s]*_bt=[^"'\s&]*)/i);
+        if (btMatch) {
+          console.log('🔍 Found in HTML via regex!');
+          console.log(`🔗 ${btMatch[0]}\n`);
+          updateHtmlFile(btMatch[0]);
+        } else {
+          console.log('❌ No _bt link found anywhere.');
+          console.log('💾 Check page-content.html and screenshots manually.');
+        }
+      }
+    } else {
+      console.log('❌ Could not find the View store button');
+      await page.screenshot({ path: 'error-no-button.png' });
+      
+      const html = await page.content();
+      fs.writeFileSync('page-content.html', html);
+      console.log('💾 Saved HTML for inspection');
+    }
     
   } catch (error) {
     console.error('❌ Error:', error.message);
-    if (error.response) {
-      console.error('Status:', error.response.status);
-      console.error('Data:', JSON.stringify(error.response.data, null, 2).substring(0, 500));
-    }
-    process.exit(1);
+    console.error(error.stack);
+  } finally {
+    await browser.close();
   }
 }
 
 function updateHtmlFile(bypassLink) {
+  // Clean the link
+  bypassLink = bypassLink.trim();
+  
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -239,8 +246,8 @@ function updateHtmlFile(bypassLink) {
 <!-- Updated: ${new Date().toISOString()} -->`;
   
   fs.writeFileSync('./index.html', html);
-  console.log('✅ index.html updated successfully!\n');
+  console.log('✅ index.html updated successfully!');
   console.log('✨ Done!\n');
 }
 
-regenerateLink();
+regenerateLink().catch(console.error);
