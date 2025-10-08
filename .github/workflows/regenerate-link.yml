@@ -25,7 +25,7 @@ jobs:
         env:
           SHOPIFY_COOKIES: ${{ secrets.SHOPIFY_COOKIES }}
           BROWSERLESS_TOKEN: ${{ secrets.BROWSERLESS_TOKEN }}
-        run: node regenerate-browserless-v2.js
+        run: node regenerate-browserless.js
       
       - name: Commit
         run: |
