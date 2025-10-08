@@ -67,9 +67,11 @@ async function regenerateLink() {
               time
             }
             scroll: evaluate(
-              code: """
-                window.scrollTo(0, document.body.scrollHeight / 2);
-                return true;
+              content: """
+                (()=>{
+                  window.scrollTo(0, document.body.scrollHeight / 2);
+                  return true;
+                })()
               """
             ) {
               value
@@ -78,9 +80,8 @@ async function regenerateLink() {
               time
             }
             extractLink: evaluate(
-              code: """
-                (() => {
-                  // Wait for the link to appear, check every 500ms for up to 40 seconds
+              content: """
+                (()=>{
                   return new Promise((resolve) => {
                     let attempts = 0;
                     const maxAttempts = 80;
@@ -88,15 +89,13 @@ async function regenerateLink() {
                     const checkForLink = () => {
                       attempts++;
                       
-                      // Look for any link containing trilogyoptic.com
-                      const links = document.querySelectorAll('a[href*="trilogyoptic.com"]');
+                      const links = document.querySelectorAll('a[href*=\"trilogyoptic.com\"]');
                       
                       if (links.length > 0) {
                         console.log('Found link after ' + attempts + ' attempts');
                         resolve(links[0].href);
                       } else if (attempts >= maxAttempts) {
                         console.log('No link found after ' + maxAttempts + ' attempts');
-                        // Return some debug info
                         const allLinks = document.querySelectorAll('a');
                         console.log('Total links on page: ' + allLinks.length);
                         resolve(null);
