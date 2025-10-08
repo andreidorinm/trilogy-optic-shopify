@@ -1,0 +1,55 @@
+name: Regenerate Shopify Store Link
+
+on:
+  schedule:
+    - cron: '0 */12 * * *'  # Every 12 hours (midnight & noon UTC)
+  workflow_dispatch:  # Adds a manual "Run workflow" button
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      
+      - name: Install dependencies
+        run: npm install
+      
+      - name: Install Chrome dependencies for Puppeteer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            chromium-browser \
+            fonts-liberation \
+            libnss3 \
+            libatk-bridge2.0-0 \
+            libdrm2 \
+            libxkbcommon0 \
+            libgbm1 \
+            libxshmfence1
+      
+      - name: Run regeneration script
+        env:
+          SHOPIFY_COOKIES: ${{ secrets.SHOPIFY_COOKIES }}
+          CI: 'true'
+        run: node regenerate-browserless.js
+      
+      - name: Commit and push updated files
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          git add index.html
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "🔄 Auto-update store link - $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git push
+          fi
