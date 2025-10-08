@@ -62,7 +62,7 @@ async function regenerateLink() {
             waitForTimeout(time: 5000) {
               time
             }
-            waitForSelector(selector: "a[href*='trilogyoptic.com']", timeout: 30000) {
+            waitForSelector(selector: ".Polaris-Button[aria-label*='View your store']", timeout: 30000) {
               selector
             }
             html {
@@ -132,7 +132,8 @@ async function regenerateLink() {
       /https:\/\/trilogyoptic\.com\/\?[^"'\s]*_bt=[^"'\s]*/,
       /href=["']([^"']*trilogyoptic\.com[^"']*_bt=[^"']*)["']/,
       /https:\/\/trilogyoptic\.com\/\?[^"'\s]*preview_theme_id=[^"'\s]*/,
-      /(https:\/\/trilogyoptic\.com\/\?[^"'\s]*key=[^"'\s]*preview_theme_id=[^"'\s]*)/
+      /(https:\/\/trilogyoptic\.com\/\?[^"'\s]*key=[^"'\s]*preview_theme_id=[^"'\s]*)/,
+      /href=["']([^"']*trilogyoptic\.com[^"']*)["']/  // Catch any trilogyoptic.com link
     ];
     
     let bypassLink = null;
@@ -141,7 +142,13 @@ async function regenerateLink() {
       const match = pageHtml.match(patterns[i]);
       if (match) {
         bypassLink = match[1] || match[0];
-        bypassLink = bypassLink.replace(/&amp;/g, '&');
+        // Decode HTML entities
+        bypassLink = bypassLink
+          .replace(/&amp;/g, '&')
+          .replace(/&quot;/g, '"')
+          .replace(/&#x27;/g, "'")
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>');
         console.log(`✅ Found link with pattern ${i + 1}\n`);
         break;
       }
