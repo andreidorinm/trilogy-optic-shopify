@@ -38,33 +38,33 @@ async function getAuthenticatedCookies() {
     try {
       console.log('🔐 Authenticating via Browserless...');
       
+      const functionCode = `
+        module.exports = async ({ page }) => {
+          await page.goto('${STORE_URL}/password', { 
+            waitUntil: 'networkidle2',
+            timeout: 30000 
+          });
+          
+          await page.waitForSelector('input[name="password"]', { timeout: 10000 });
+          await page.type('input[name="password"]', '${PASSWORD}');
+          
+          await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
+            page.keyboard.press('Enter')
+          ]);
+          
+          const cookies = await page.cookies();
+          return cookies;
+        };
+      `;
+      
       const response = await axios.post(
         `https://production-sfo.browserless.io/function?token=${BROWSERLESS_TOKEN}`,
-        {
-          code: `
-            async ({ page }) => {
-              await page.goto('${STORE_URL}/password', { 
-                waitUntil: 'networkidle2',
-                timeout: 30000 
-              });
-              
-              await page.waitForSelector('input[name="password"]', { timeout: 10000 });
-              await page.type('input[name="password"]', '${PASSWORD}');
-              
-              await Promise.all([
-                page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
-                page.keyboard.press('Enter')
-              ]);
-              
-              const cookies = await page.cookies();
-              return cookies;
-            }
-          `
-        },
+        functionCode,
         {
           timeout: 90000,
           headers: { 
-            'Content-Type': 'application/json',
+            'Content-Type': 'application/javascript',
             'Cache-Control': 'no-cache'
           }
         }
