@@ -2,8 +2,8 @@ name: Regenerate Shopify Store Link
 
 on:
   schedule:
-    - cron: '0 */12 * * *'  # Every 12 hours (midnight & noon UTC)
-  workflow_dispatch:  # Adds a manual "Run workflow" button
+    - cron: '0 */12 * * *'  # Every 12 hours
+  workflow_dispatch:  # Manual trigger button
 
 jobs:
   regenerate:
@@ -23,23 +23,11 @@ jobs:
       - name: Install dependencies
         run: npm install
       
-      - name: Install Chrome dependencies for Puppeteer
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            chromium-browser \
-            fonts-liberation \
-            libnss3 \
-            libatk-bridge2.0-0 \
-            libdrm2 \
-            libxkbcommon0 \
-            libgbm1 \
-            libxshmfence1
-      
       - name: Run regeneration script
         env:
           SHOPIFY_COOKIES: ${{ secrets.SHOPIFY_COOKIES }}
           CI: 'true'
+          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'false'
         run: node regenerate-browserless.js
       
       - name: Commit and push updated files

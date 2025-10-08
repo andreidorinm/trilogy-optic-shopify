@@ -31,13 +31,12 @@ async function regenerateLink() {
   console.log(`🍪 Loaded ${validCookies.length} cookies\n`);
   
   const browser = await puppeteer.launch({
-    headless: process.env.CI === 'true', 
-    executablePath: process.env.CI === 'true' ? '/usr/bin/chromium-browser' : undefined,
+    headless: 'new',
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-blink-features=AutomationControlled',
-      '--disable-dev-shm-usage', 
+      '--disable-dev-shm-usage',
       '--disable-gpu'
     ]
   });
