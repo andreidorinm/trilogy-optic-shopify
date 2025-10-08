@@ -12,9 +12,11 @@ async function regenerateBypassLink() {
   const page = await browser.newPage();
   
   try {
-    // Load cookies from environment variable (set in GitHub Secrets)
+    // Load cookies from environment variable
     const cookiesString = process.env.SHOPIFY_COOKIES || fs.readFileSync('./shopify-cookies.json', 'utf-8');
     const cookies = JSON.parse(cookiesString);
+    
+    console.log(`📊 Loaded ${cookies.length} cookies\n`);
     
     // Convert to Puppeteer format
     const puppeteerCookies = cookies.map(c => ({
@@ -32,42 +34,99 @@ async function regenerateBypassLink() {
     console.log('✅ Cookies loaded\n');
     
     // Navigate to themes page
-    console.log('🌐 Navigating to Shopify...');
-    await page.goto('https://admin.shopify.com/store/trilogyopticdemo/themes', {
+    console.log('🌐 Navigating to Shopify themes page...');
+    const response = await page.goto('https://admin.shopify.com/store/trilogyopticdemo/themes', {
       waitUntil: 'networkidle2',
       timeout: 60000
     });
     
-    // Wait for page to fully load
-    console.log('⏳ Waiting for page to load...');
-    await page.waitForSelector('a[href*="_bt="]', { timeout: 30000 });
+    console.log(`📄 Page status: ${response.status()}`);
+    console.log(`📍 Final URL: ${page.url()}\n`);
     
-    // Give it a moment to ensure everything is rendered
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    // Check if we got redirected to login
+    if (page.url().includes('login') || page.url().includes('accounts.shopify.com')) {
+      console.log('❌ Redirected to login page - cookies might be expired!');
+      console.log('🔄 Please re-export your cookies from Chrome\n');
+      
+      await page.screenshot({ path: 'login-page.png', fullPage: true });
+      console.log('📸 Screenshot saved as login-page.png\n');
+      
+      throw new Error('Session expired - cookies need to be refreshed');
+    }
     
-    // Extract bypass link
-    console.log('🔍 Extracting bypass link...');
+    // Wait for page to load
+    console.log('⏳ Waiting for page content to load...');
+    await new Promise(resolve => setTimeout(resolve, 5000));
+    
+    // Take a screenshot for debugging
+    await page.screenshot({ path: 'themes-page.png', fullPage: true });
+    console.log('📸 Screenshot saved as themes-page.png\n');
+    
+    // Debug: Log page title
+    const title = await page.title();
+    console.log(`📝 Page title: ${title}\n`);
+    
+    // Debug: Check what links are on the page
+    console.log('🔍 Searching for links on the page...');
+    const allLinks = await page.evaluate(() => {
+      const links = Array.from(document.querySelectorAll('a'));
+      return links.map(a => ({
+        text: a.textContent.trim().substring(0, 50),
+        href: a.href.substring(0, 100)
+      })).filter(l => l.text || l.href);
+    });
+    
+    console.log(`📊 Found ${allLinks.length} links on page\n`);
+    
+    // Show first 10 links for debugging
+    console.log('First 10 links:');
+    allLinks.slice(0, 10).forEach((link, i) => {
+      console.log(`  ${i + 1}. "${link.text}" → ${link.href}`);
+    });
+    console.log('');
+    
+    // Look for links containing _bt or preview
+    const relevantLinks = allLinks.filter(l => 
+      l.href.includes('_bt=') || 
+      l.text.toLowerCase().includes('view') ||
+      l.text.toLowerCase().includes('preview') ||
+      l.href.includes('preview_theme_id')
+    );
+    
+    console.log(`🎯 Found ${relevantLinks.length} potentially relevant links:`);
+    relevantLinks.forEach((link, i) => {
+      console.log(`  ${i + 1}. "${link.text}" → ${link.href}`);
+    });
+    console.log('');
+    
+    // Try to find the bypass link
+    console.log('🔍 Attempting to extract bypass link...');
     const bypassLink = await page.evaluate(() => {
-      // Try multiple selectors
+      // Method 1: Look for "View" buttons
+      const viewButtons = Array.from(document.querySelectorAll('a'))
+        .filter(a => {
+          const text = a.textContent.toLowerCase();
+          return (text.includes('view') && text.includes('store')) || 
+                 text.includes('preview');
+        });
       
-      // Method 1: Find "View your store" button
-      const viewStoreButton = Array.from(document.querySelectorAll('a'))
-        .find(a => a.textContent.includes('View your store') || a.textContent.includes('View store'));
-      if (viewStoreButton && viewStoreButton.href.includes('_bt=')) {
-        return viewStoreButton.href;
+      for (const button of viewButtons) {
+        if (button.href && button.href.includes('_bt=')) {
+          return button.href;
+        }
       }
       
-      // Method 2: Find any link with _bt parameter
-      const btLink = document.querySelector('a[href*="_bt="]');
-      if (btLink) {
-        return btLink.href;
+      // Method 2: Any link with _bt parameter
+      const btLinks = Array.from(document.querySelectorAll('a[href*="_bt="]'));
+      if (btLinks.length > 0) {
+        return btLinks[0].href;
       }
       
-      // Method 3: Search all links
-      const allLinks = Array.from(document.querySelectorAll('a'));
-      for (const link of allLinks) {
-        if (link.href && link.href.includes('_bt=') && link.href.includes('trilogyoptic.com')) {
-          return link.href;
+      // Method 3: Search all hrefs
+      const allAs = Array.from(document.querySelectorAll('a'));
+      for (const a of allAs) {
+        if (a.href && a.href.includes('trilogyoptic.com') && a.href.includes('_bt=')) {
+          return a.href;
         }
       }
       
@@ -75,14 +134,24 @@ async function regenerateBypassLink() {
     });
     
     if (!bypassLink) {
-      // Take a screenshot for debugging
-      await page.screenshot({ path: 'debug-screenshot.png', fullPage: true });
-      console.log('📸 Screenshot saved as debug-screenshot.png for debugging');
-      throw new Error('Could not find bypass link on the page');
+      console.log('❌ Could not find bypass link automatically\n');
+      console.log('💡 Please check themes-page.png to see what\'s on the page\n');
+      
+      // Save page HTML for inspection
+      const html = await page.content();
+      fs.writeFileSync('page-content.html', html);
+      console.log('📄 Page HTML saved as page-content.html\n');
+      
+      throw new Error('Bypass link not found - check screenshots and HTML dump');
     }
     
-    console.log('✅ Link extracted!');
-    console.log('🔗 Link preview:', bypassLink.substring(0, 100) + '...\n');
+    console.log('✅ Link extracted successfully!');
+    console.log(`🔗 Full link: ${bypassLink}\n`);
+    
+    // Validate the link
+    if (!bypassLink.includes('trilogyoptic.com') || !bypassLink.includes('_bt=')) {
+      throw new Error('Invalid bypass link format');
+    }
     
     // Check expiration
     try {
@@ -94,11 +163,11 @@ async function regenerateBypassLink() {
         const now = new Date();
         const minutesLeft = Math.floor((expiryDate - now) / (1000 * 60));
         
-        console.log('📅 New link expires:', expiryDate.toLocaleString('es-ES'));
+        console.log('📅 Link expires:', expiryDate.toLocaleString('es-ES'));
         console.log(`⏰ Time remaining: ${minutesLeft} minutes\n`);
       }
     } catch (e) {
-      console.log('⚠️  Could not decode expiration (non-critical)\n');
+      console.log('⚠️  Could not decode expiration date\n');
     }
     
     // Update index.html
@@ -158,7 +227,6 @@ async function regenerateBypassLink() {
   </div>
   
   <script>
-    // Backup redirect in case meta refresh doesn't work
     setTimeout(function() {
       window.location.href = '${bypassLink}';
     }, 100);
@@ -175,7 +243,7 @@ async function regenerateBypassLink() {
     
   } catch (error) {
     console.error('❌ Error:', error.message);
-    console.error('Stack trace:', error.stack);
+    console.error('\n📋 Full error:', error);
     await browser.close();
     process.exit(1);
   }
