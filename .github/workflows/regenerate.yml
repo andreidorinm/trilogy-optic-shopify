@@ -2,7 +2,7 @@ name: Regenerate Shopify Store Link
 
 on:
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: '0 */6 * * *'  # Every 6 hours
   workflow_dispatch:
 
 jobs:
@@ -11,18 +11,18 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'npm'
       
       - name: Cache Puppeteer browser
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.cache/puppeteer
           key: ${{ runner.os }}-puppeteer-${{ hashFiles('package-lock.json') }}
@@ -40,12 +40,13 @@ jobs:
       
       - name: Upload debug artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: debug-files
           path: |
             *.png
             page-content.html
+          if-no-files-found: warn
       
       - name: Commit and push updated files
         run: |
