@@ -26,58 +26,70 @@ let cookieCache = null;
 let cacheExpiry = null;
 
 async function getAuthenticatedCookies() {
-  if (cookieCache && cacheExpiry && Date.now() < cacheExpiry) {
-    console.log('✓ Using cached cookies');
-    return cookieCache;
-  }
-
-  if (!BROWSERLESS_TOKEN) {
-    throw new Error('BROWSERLESS_TOKEN not set');
-  }
-
-  try {
-    console.log('🔐 Authenticating via Browserless...');
-    
-    const response = await axios.post(
-        `https://production-sfo.browserless.io/function?token=${BROWSERLESS_TOKEN}`,
-      {
-        code: `
-          module.exports = async ({ page }) => {
-            await page.goto('${STORE_URL}/password', { waitUntil: 'networkidle2' });
-            await page.waitForSelector('input[name="password"]');
-            await page.type('input[name="password"]', '${PASSWORD}');
-            await Promise.all([
-              page.waitForNavigation({ waitUntil: 'networkidle2' }),
-              page.keyboard.press('Enter')
-            ]);
-            const cookies = await page.cookies();
-            return cookies;
-          }
-        `
-      },
-      {
-        timeout: 60000,
-        headers: { 'Content-Type': 'application/json' }
-      }
-    );
-
-    const cookies = response.data;
-    
-    if (!cookies || cookies.length === 0) {
-      throw new Error('No cookies returned');
+    if (cookieCache && cacheExpiry && Date.now() < cacheExpiry) {
+      console.log('✓ Using cached cookies');
+      return cookieCache;
     }
-
-    cookieCache = cookies;
-    cacheExpiry = Date.now() + (30 * 60 * 1000);
-
-    console.log('✅ Got', cookies.length, 'cookies from Browserless');
-    return cookies;
-
-  } catch (error) {
-    console.error('❌ Browserless error:', error.message);
-    throw error;
+  
+    if (!BROWSERLESS_TOKEN) {
+      throw new Error('BROWSERLESS_TOKEN environment variable not set');
+    }
+  
+    try {
+      console.log('🔐 Authenticating via Browserless...');
+      
+      const response = await axios.post(
+        `https://production-sfo.browserless.io/function?token=${BROWSERLESS_TOKEN}`,
+        {
+          code: `
+            async ({ page }) => {
+              await page.goto('${STORE_URL}/password', { 
+                waitUntil: 'networkidle2',
+                timeout: 30000 
+              });
+              
+              await page.waitForSelector('input[name="password"]', { timeout: 10000 });
+              await page.type('input[name="password"]', '${PASSWORD}');
+              
+              await Promise.all([
+                page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
+                page.keyboard.press('Enter')
+              ]);
+              
+              const cookies = await page.cookies();
+              return cookies;
+            }
+          `
+        },
+        {
+          timeout: 90000,
+          headers: { 
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache'
+          }
+        }
+      );
+  
+      const cookies = response.data;
+      
+      if (!cookies || cookies.length === 0) {
+        throw new Error('No cookies returned from Browserless');
+      }
+  
+      cookieCache = cookies;
+      cacheExpiry = Date.now() + (30 * 60 * 1000);
+  
+      console.log('✅ Got', cookies.length, 'cookies from Browserless');
+      return cookies;
+  
+    } catch (error) {
+      console.error('❌ Browserless error details:');
+      console.error('Status:', error.response?.status);
+      console.error('Data:', error.response?.data);
+      console.error('Message:', error.message);
+      throw error;
+    }
   }
-}
 
 app.get('/', (req, res) => {
   res.send(`
