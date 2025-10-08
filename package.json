@@ -2,13 +2,11 @@
   "name": "trilogy-link-regenerator",
   "version": "1.0.0",
   "description": "Auto-regenerate Shopify bypass link",
-  "main": "regenerate-bypass-link.js",
+  "main": "regenerate-browserless.js",
   "scripts": {
-    "regenerate": "node regenerate-bypass-link.js"
+    "regenerate": "node regenerate-browserless.js"
   },
   "dependencies": {
-    "puppeteer": "^23.0.0",
-    "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2"
+    "axios": "^1.7.9"
   }
 }

@@ -2,9 +2,8 @@ name: Auto-Regenerate Shopify Bypass Link
 
 on:
   schedule:
-    # Run every 50 minutes
-    - cron: '*/50 * * * *'
-  workflow_dispatch:  # Allow manual trigger
+    - cron: '*/50 * * * *'  # Every 50 minutes
+  workflow_dispatch:  # Manual trigger
 
 jobs:
   regenerate:
@@ -20,17 +19,18 @@ jobs:
           node-version: '18'
       
       - name: Install dependencies
-        run: npm install puppeteer
+        run: npm install
       
       - name: Regenerate bypass link
         env:
           SHOPIFY_COOKIES: ${{ secrets.SHOPIFY_COOKIES }}
-        run: node regenerate-bypass-link.js
+          BROWSERLESS_TOKEN: ${{ secrets.BROWSERLESS_TOKEN }}
+        run: node regenerate-browserless.js
       
       - name: Commit and push changes
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
           git add index.html
-          git diff --quiet && git diff --staged --quiet || git commit -m "Auto-update Shopify bypass link [skip ci]"
+          git diff --quiet && git diff --staged --quiet || git commit -m "Auto-update bypass link [skip ci]"
           git push
