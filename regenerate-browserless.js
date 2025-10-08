@@ -68,49 +68,110 @@ async function regenerateLink() {
     await page.setCookie(...validCookies);
     console.log('✅ Cookies set\n');
     
-    // CRITICAL: Set up listeners BEFORE navigation to catch the temporary URL
-    let capturedLink = null;
-    let capturedFromPopup = null;
+    // CRITICAL: Capture the bypass URL from API responses
+    let capturedBypassUrl = null;
     
-    // Listen for new pages/tabs (popups)
-    browser.on('targetcreated', async (target) => {
-      if (target.type() === 'page') {
-        console.log('🔔 New page/popup detected!');
-        const newPage = await target.page();
-        if (newPage) {
-          const url = newPage.url();
-          console.log('🔗 Popup URL:', url);
-          
-          if (url.includes('_bt=')) {
-            capturedFromPopup = url;
-            console.log('✅ CAPTURED LINK FROM POPUP!');
-          }
-        }
-      }
-    });
-    
-    // Listen for URL changes on the current page
-    page.on('framenavigated', (frame) => {
-      if (frame === page.mainFrame()) {
-        const url = frame.url();
-        console.log('🔄 URL changed to:', url);
-        
-        if (url.includes('_bt=') && !capturedLink) {
-          capturedLink = url;
-          console.log('✅ CAPTURED LINK FROM NAVIGATION!');
-        }
-      }
-    });
-    
-    // Listen for request interception (catch the redirect)
+    // Enable request interception
     await page.setRequestInterception(true);
+    
+    // Listen for responses to capture the bypass URL from API calls
+    page.on('response', async (response) => {
+      const url = response.url();
+      
+      // Look for the preview session creation API call
+      if (url.includes('CreateProductDetailsPagePreviewSessionMutation') || 
+          url.includes('preview') || 
+          url.includes('_bt=')) {
+        
+        console.log('🎯 Found preview-related response:', url);
+        
+        try {
+          const contentType = response.headers()['content-type'];
+          
+          if (contentType && contentType.includes('application/json')) {
+            const responseBody = await response.text();
+            console.log('📦 Response body preview:', responseBody.substring(0, 500));
+            
+            // Try to parse JSON
+            try {
+              const json = JSON.parse(responseBody);
+              const jsonStr = JSON.stringify(json);
+              
+              // Look for URLs with _bt parameter in the response
+              const btMatch = jsonStr.match(/(https?:\/\/[^"'\s\\]*_bt=[^"'\s\\&]*)/i);
+              if (btMatch) {
+                // Decode any escaped characters
+                let foundUrl = btMatch[0].replace(/\\\//g, '/');
+                capturedBypassUrl = foundUrl;
+                console.log('✅ FOUND BYPASS URL IN API RESPONSE!');
+                console.log('🔗', capturedBypassUrl);
+              }
+              
+              // Also look for preview_theme_id which might be in a separate field
+              const previewMatch = jsonStr.match(/(https?:\/\/[^"'\s\\]*preview_theme_id=[^"'\s\\&]*)/i);
+              if (previewMatch && !capturedBypassUrl) {
+                let foundUrl = previewMatch[0].replace(/\\\//g, '/');
+                capturedBypassUrl = foundUrl;
+                console.log('✅ FOUND PREVIEW URL IN API RESPONSE!');
+                console.log('🔗', capturedBypassUrl);
+              }
+            } catch (e) {
+              // Not JSON, check raw text
+              const btMatch = responseBody.match(/(https?:\/\/[^"'\s]*_bt=[^"'\s&]*)/i);
+              if (btMatch) {
+                capturedBypassUrl = btMatch[0];
+                console.log('✅ FOUND BYPASS URL IN RESPONSE TEXT!');
+                console.log('🔗', capturedBypassUrl);
+              }
+            }
+          }
+        } catch (error) {
+          console.log('⚠️ Could not read response body:', error.message);
+        }
+      }
+    });
+    
+    // Also intercept requests
     page.on('request', (request) => {
       const url = request.url();
-      if (url.includes('_bt=') && !capturedLink) {
-        capturedLink = url;
-        console.log('✅ CAPTURED LINK FROM REQUEST:', url);
+      
+      if (url.includes('_bt=') || url.includes('preview_theme_id')) {
+        console.log('📍 Request with bypass params:', url);
+        if (!capturedBypassUrl) {
+          capturedBypassUrl = url;
+          console.log('✅ CAPTURED FROM REQUEST!');
+        }
       }
+      
       request.continue();
+    });
+    
+    // Listen for new popup pages
+    browser.on('targetcreated', async (target) => {
+      if (target.type() === 'page') {
+        console.log('🔔 New popup detected!');
+        try {
+          const newPage = await target.page();
+          
+          if (newPage) {
+            // Check the initial URL
+            const initialUrl = newPage.url();
+            console.log('🔗 Popup URL:', initialUrl);
+            
+            if ((initialUrl.includes('_bt=') || initialUrl.includes('preview_theme_id')) && !capturedBypassUrl) {
+              capturedBypassUrl = initialUrl;
+              console.log('✅ CAPTURED FROM POPUP URL!');
+            }
+            
+            // Close popup after a moment
+            setTimeout(() => {
+              newPage.close().catch(() => {});
+            }, 2000);
+          }
+        } catch (error) {
+          console.log('⚠️ Error accessing popup:', error.message);
+        }
+      }
     });
     
     // Navigate to Shopify admin themes page
@@ -201,25 +262,23 @@ async function regenerateLink() {
     
     if (buttonSelector) {
       console.log(`✅ Found button with selector: ${buttonSelector}\n`);
-      console.log('🎯 Now clicking and listening for the link...\n');
+      console.log('🎯 Now clicking and listening for the API response...\n');
       
       // Click the button
       await page.click(buttonSelector);
       console.log('🖱️  Clicked button!');
       
-      // Wait for the link to be captured
+      // Wait for the API call and popup
       await page.waitForTimeout(5000);
       
       console.log('📸 Taking screenshot 2...');
       await page.screenshot({ path: 'step2-after-click.png' });
       
       // Check what we captured
-      const finalLink = capturedFromPopup || capturedLink;
-      
-      if (finalLink) {
+      if (capturedBypassUrl) {
         console.log('\n🎉 SUCCESS! Captured the bypass link!');
-        console.log(`🔗 ${finalLink}\n`);
-        updateHtmlFile(finalLink);
+        console.log(`🔗 ${capturedBypassUrl}\n`);
+        updateHtmlFile(capturedBypassUrl);
       } else {
         console.log('\n⚠️  No link captured by listeners. Trying manual extraction...\n');
         
@@ -276,8 +335,11 @@ async function regenerateLink() {
 }
 
 function updateHtmlFile(bypassLink) {
-  // Clean the link
+  // Clean the link - handle URL encoded characters
   bypassLink = bypassLink.trim();
+  
+  // If the URL has escaped slashes, fix them
+  bypassLink = bypassLink.replace(/\\\//g, '/');
   
   const html = `<!DOCTYPE html>
 <html lang="en">
