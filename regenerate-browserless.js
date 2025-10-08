@@ -2,38 +2,28 @@ const axios = require('axios');
 const fs = require('fs');
 
 async function regenerateLink() {
-  console.log('🚀 Regenerating bypass link via Browserless...\n');
+  console.log('🚀 Trying Browserless /chromium endpoint...\n');
   
   const browserlessToken = process.env.BROWSERLESS_TOKEN;
   const cookiesJson = process.env.SHOPIFY_COOKIES;
   
-  if (!browserlessToken) {
-    throw new Error('BROWSERLESS_TOKEN not set');
-  }
-  
-  if (!cookiesJson) {
-    throw new Error('SHOPIFY_COOKIES not set');
+  if (!browserlessToken || !cookiesJson) {
+    throw new Error('Missing environment variables');
   }
   
   console.log('✅ Environment variables loaded\n');
   
   try {
-    console.log('🌐 Calling Browserless API...');
-    
-    // Parse cookies
     const cookies = JSON.parse(cookiesJson);
     
-    // Convert cookies to Browserless format with validation
+    // Normalize cookies
     const browserlessCookies = cookies.map(c => {
-      // Normalize sameSite value
-      let sameSite = 'Lax'; // Default
+      let sameSite = 'Lax';
       if (c.sameSite) {
         const normalized = c.sameSite.toLowerCase();
-        if (normalized === 'lax') sameSite = 'Lax';
-        else if (normalized === 'strict') sameSite = 'Strict';
-        else if (normalized === 'none') sameSite = 'None';
-        else if (normalized === 'no_restriction') sameSite = 'None';
-        else sameSite = 'Lax'; // Fallback
+        if (['lax', 'strict', 'none'].includes(normalized)) {
+          sameSite = normalized.charAt(0).toUpperCase() + normalized.slice(1);
+        }
       }
       
       return {
@@ -48,20 +38,28 @@ async function regenerateLink() {
       };
     });
     
-    console.log(`📊 Converted ${browserlessCookies.length} cookies\n`);
+    console.log('🌐 Calling Browserless /chromium endpoint...');
     
     const response = await axios.post(
-      `https://production-sfo.browserless.io/content?token=${browserlessToken}`,
+      `https://production-sfo.browserless.io/chromium?token=${browserlessToken}`,
       {
         url: 'https://admin.shopify.com/store/trilogyopticdemo/themes',
         cookies: browserlessCookies,
         gotoOptions: {
-          waitUntil: 'networkidle2',
-          timeout: 60000
-        }
+          waitUntil: 'networkidle0',
+          timeout: 90000
+        },
+        authenticate: null,
+        viewport: {
+          width: 1920,
+          height: 1080
+        },
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        stealth: true,
+        blockAds: false
       },
       {
-        timeout: 90000,
+        timeout: 120000,
         headers: {
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache'
@@ -69,69 +67,77 @@ async function regenerateLink() {
       }
     );
     
-    const pageHtml = response.data;
+    // Check response type
+    console.log('📦 Response received');
+    console.log('Response type:', typeof response.data);
     
-    console.log('📦 Page content received');
+    let pageHtml = '';
+    
+    if (typeof response.data === 'string') {
+      pageHtml = response.data;
+    } else if (response.data.data) {
+      pageHtml = response.data.data;
+    } else {
+      pageHtml = JSON.stringify(response.data);
+    }
+    
     console.log(`📏 Content length: ${pageHtml.length} characters\n`);
     
-    // Check if we got blocked
+    // Check for blocks
     if (pageHtml.includes('Just a moment')) {
-      console.log('❌ Still blocked by Cloudflare');
-      throw new Error('Cloudflare blocking access');
+      console.log('❌ Still blocked by Cloudflare\n');
+      fs.writeFileSync('cloudflare-block.html', pageHtml);
+      throw new Error('Cloudflare blocking - check cloudflare-block.html');
     }
     
-    // Check if redirected to login
-    if (pageHtml.includes('accounts.shopify.com') || pageHtml.includes('login')) {
-      console.log('❌ Redirected to login - cookies expired');
-      throw new Error('Session expired - refresh cookies');
+    if (pageHtml.includes('login') || pageHtml.includes('accounts.shopify.com')) {
+      console.log('❌ Redirected to login\n');
+      throw new Error('Session expired - cookies need refresh');
     }
     
-    console.log('🔍 Searching for bypass link in HTML...');
+    // Extract link
+    console.log('🔍 Extracting bypass link...');
     
-    // Extract bypass link from HTML - try multiple patterns
+    // Try multiple patterns
+    const patterns = [
+      /https:\/\/trilogyoptic\.com\/\?[^"'\s]*_bt=[^"'\s]*/,
+      /href=["']([^"']*trilogyoptic\.com[^"']*_bt=[^"']*)["']/,
+      /https:\/\/trilogyoptic\.com\/\?[^"'\s]*preview_theme_id=[^"'\s]*/,
+      /(https:\/\/trilogyoptic\.com\/\?[^"'\s]*key=[^"'\s]*)/
+    ];
+    
     let bypassLink = null;
     
-    // Pattern 1: Direct URL with _bt parameter
-    const btLinkMatch = pageHtml.match(/https:\/\/trilogyoptic\.com\/\?[^"'\s]*_bt=[^"'\s]*/);
-    if (btLinkMatch) {
-      bypassLink = btLinkMatch[0];
-    }
-    
-    // Pattern 2: href attribute
-    if (!bypassLink) {
-      const hrefMatch = pageHtml.match(/href="([^"]*trilogyoptic\.com[^"]*_bt=[^"]*)"/);
-      if (hrefMatch) {
-        bypassLink = hrefMatch[1];
-      }
-    }
-    
-    // Pattern 3: Any link with preview_theme_id and key
-    if (!bypassLink) {
-      const previewMatch = pageHtml.match(/https:\/\/trilogyoptic\.com\/\?[^"'\s]*preview_theme_id=[^"'\s]*/);
-      if (previewMatch) {
-        bypassLink = previewMatch[0];
+    for (const pattern of patterns) {
+      const match = pageHtml.match(pattern);
+      if (match) {
+        bypassLink = match[1] || match[0];
+        bypassLink = bypassLink.replace(/&amp;/g, '&');
+        console.log(`✅ Found link with pattern ${patterns.indexOf(pattern) + 1}`);
+        break;
       }
     }
     
     if (!bypassLink) {
-      console.log('❌ No bypass link found in page HTML');
+      console.log('❌ No bypass link found\n');
       
-      // Save HTML for debugging
+      // Debug: Save HTML and show snippet
       fs.writeFileSync('page-debug.html', pageHtml);
-      console.log('📄 Saved page HTML to page-debug.html for inspection\n');
+      console.log('📄 Saved to page-debug.html\n');
       
-      throw new Error('Bypass link not found in page');
+      // Show a snippet of the HTML
+      const snippet = pageHtml.substring(0, 500);
+      console.log('HTML snippet:', snippet);
+      
+      throw new Error('Bypass link not found');
     }
-    
-    // Decode HTML entities
-    bypassLink = bypassLink.replace(/&amp;/g, '&');
     
     console.log('✅ Bypass link extracted!');
-    console.log(`🔗 ${bypassLink.substring(0, 100)}...\n`);
+    console.log(`🔗 ${bypassLink}\n`);
     
-    // Validate link
+    // Validate
     if (!bypassLink.includes('trilogyoptic.com')) {
-      throw new Error('Invalid bypass link - does not contain store URL');
+      throw new Error('Invalid link format');
     }
     
     // Check expiration
@@ -146,16 +152,17 @@ async function regenerateLink() {
         console.log(`⏰ Valid for: ${minutesLeft} minutes\n`);
       }
     } catch (e) {
-      console.log('⚠️  Could not decode expiration (link might not have _bt parameter)\n');
+      console.log('ℹ️  No expiration data in link\n');
     }
     
+    // Update HTML
     updateHtmlFile(bypassLink);
     
   } catch (error) {
     console.error('❌ Error:', error.message);
     if (error.response) {
-      console.error('Response status:', error.response.status);
-      console.error('Response data:', error.response.data);
+      console.error('Status:', error.response.status);
+      console.error('Data:', JSON.stringify(error.response.data).substring(0, 200));
     }
     process.exit(1);
   }
@@ -211,7 +218,7 @@ function updateHtmlFile(bypassLink) {
 <!-- Updated: ${new Date().toISOString()} -->`;
   
   fs.writeFileSync('./index.html', html);
-  console.log('✅ index.html updated successfully\n');
+  console.log('✅ index.html updated!\n');
   console.log('✨ Done!\n');
 }
 
