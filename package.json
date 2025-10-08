@@ -1,13 +1,10 @@
 {
     "name": "trilogy-optic-shopify",
     "version": "1.0.0",
-    "description": "Auto-regenerate Shopify store bypass link",
-    "main": "regenerate-browserless.js",
-    "scripts": {
-      "regenerate": "node regenerate-browserless.js"
-    },
     "dependencies": {
       "puppeteer": "^21.0.0",
+      "puppeteer-extra": "^3.3.6",
+      "puppeteer-extra-plugin-stealth": "^2.11.2",
       "dotenv": "^16.0.0"
     }
   }

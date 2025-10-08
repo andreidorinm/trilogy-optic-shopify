@@ -1,6 +1,9 @@
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
 require('dotenv').config();
+
+puppeteer.use(StealthPlugin());
 
 async function regenerateLink() {
   console.log('🚀 Starting local Puppeteer automation...\n');
@@ -43,9 +46,23 @@ async function regenerateLink() {
   
   try {
     const page = await browser.newPage();
-    
+
     // Set viewport
     await page.setViewport({ width: 1920, height: 1080 });
+    
+    // Add realistic user agent and headers
+    await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    
+    await page.setExtraHTTPHeaders({
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none'
+    });
     
     // Set cookies
     await page.setCookie(...validCookies);
