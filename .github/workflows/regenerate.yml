@@ -6,6 +6,10 @@ on:
     - cron: '0 */6 * * *'
   workflow_dispatch: # Allow manual trigger
 
+# IMPORTANT: Grant write permissions to the workflow
+permissions:
+  contents: write
+
 jobs:
   regenerate:
     runs-on: ubuntu-latest
