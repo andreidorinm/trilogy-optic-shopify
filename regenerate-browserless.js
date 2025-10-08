@@ -2,7 +2,7 @@ const axios = require('axios');
 const fs = require('fs');
 
 async function regenerateLink() {
-  console.log('🚀 Trying Browserless /chromium endpoint...\n');
+  console.log('🚀 Using Browserless BrowserQL (GraphQL) - Best anti-detection...\n');
   
   const browserlessToken = process.env.BROWSERLESS_TOKEN;
   const cookiesJson = process.env.SHOPIFY_COOKIES;
@@ -38,25 +38,28 @@ async function regenerateLink() {
       };
     });
     
-    console.log('🌐 Calling Browserless /chromium endpoint...');
+    console.log('🌐 Calling Browserless BrowserQL endpoint...');
     
     const response = await axios.post(
-      `https://production-sfo.browserless.io/chromium?token=${browserlessToken}`,
+      `https://production-sfo.browserless.io/chromium/bql?token=${browserlessToken}`,
       {
-        url: 'https://admin.shopify.com/store/trilogyopticdemo/themes',
-        cookies: browserlessCookies,
-        gotoOptions: {
-          waitUntil: 'networkidle0',
-          timeout: 90000
-        },
-        authenticate: null,
-        viewport: {
-          width: 1920,
-          height: 1080
-        },
-        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        stealth: true,
-        blockAds: false
+        query: `
+          mutation GetPageContent($url: String!, $cookies: [CookieInput!]!) {
+            goto(
+              url: $url
+              cookies: $cookies
+              waitUntil: networkidle
+              timeout: 60000
+            ) {
+              status
+            }
+            content
+          }
+        `,
+        variables: {
+          url: 'https://admin.shopify.com/store/trilogyopticdemo/themes',
+          cookies: browserlessCookies
+        }
       },
       {
         timeout: 120000,
@@ -67,77 +70,77 @@ async function regenerateLink() {
       }
     );
     
-    // Check response type
-    console.log('📦 Response received');
-    console.log('Response type:', typeof response.data);
+    console.log('📦 Response received\n');
     
-    let pageHtml = '';
-    
-    if (typeof response.data === 'string') {
-      pageHtml = response.data;
-    } else if (response.data.data) {
-      pageHtml = response.data.data;
-    } else {
-      pageHtml = JSON.stringify(response.data);
+    // Check for errors
+    if (response.data.errors) {
+      console.error('❌ GraphQL errors:', JSON.stringify(response.data.errors, null, 2));
+      throw new Error('GraphQL query failed');
     }
     
+    const result = response.data.data;
+    const pageHtml = result.content;
+    const status = result.goto?.status;
+    
+    console.log(`📄 Page status: ${status}`);
     console.log(`📏 Content length: ${pageHtml.length} characters\n`);
     
-    // Check for blocks
+    // Check for Cloudflare block
     if (pageHtml.includes('Just a moment')) {
       console.log('❌ Still blocked by Cloudflare\n');
       fs.writeFileSync('cloudflare-block.html', pageHtml);
-      throw new Error('Cloudflare blocking - check cloudflare-block.html');
+      throw new Error('Cloudflare blocking - saved to cloudflare-block.html');
     }
     
+    // Check for login redirect
     if (pageHtml.includes('login') || pageHtml.includes('accounts.shopify.com')) {
-      console.log('❌ Redirected to login\n');
-      throw new Error('Session expired - cookies need refresh');
+      console.log('❌ Redirected to login - cookies expired\n');
+      throw new Error('Session expired - refresh cookies');
     }
     
-    // Extract link
-    console.log('🔍 Extracting bypass link...');
+    // Extract bypass link
+    console.log('🔍 Extracting bypass link from HTML...');
     
-    // Try multiple patterns
     const patterns = [
       /https:\/\/trilogyoptic\.com\/\?[^"'\s]*_bt=[^"'\s]*/,
       /href=["']([^"']*trilogyoptic\.com[^"']*_bt=[^"']*)["']/,
       /https:\/\/trilogyoptic\.com\/\?[^"'\s]*preview_theme_id=[^"'\s]*/,
-      /(https:\/\/trilogyoptic\.com\/\?[^"'\s]*key=[^"'\s]*)/
+      /(https:\/\/trilogyoptic\.com\/\?[^"'\s]*key=[^"'\s]*preview_theme_id=[^"'\s]*)/
     ];
     
     let bypassLink = null;
     
-    for (const pattern of patterns) {
-      const match = pageHtml.match(pattern);
+    for (let i = 0; i < patterns.length; i++) {
+      const match = pageHtml.match(patterns[i]);
       if (match) {
         bypassLink = match[1] || match[0];
         bypassLink = bypassLink.replace(/&amp;/g, '&');
-        console.log(`✅ Found link with pattern ${patterns.indexOf(pattern) + 1}`);
+        console.log(`✅ Found link with pattern ${i + 1}\n`);
         break;
       }
     }
     
     if (!bypassLink) {
-      console.log('❌ No bypass link found\n');
+      console.log('❌ No bypass link found in HTML\n');
       
-      // Debug: Save HTML and show snippet
+      // Save for debugging
       fs.writeFileSync('page-debug.html', pageHtml);
-      console.log('📄 Saved to page-debug.html\n');
+      console.log('📄 Saved HTML to page-debug.html\n');
       
-      // Show a snippet of the HTML
-      const snippet = pageHtml.substring(0, 500);
-      console.log('HTML snippet:', snippet);
+      // Show snippet
+      console.log('HTML snippet (first 500 chars):');
+      console.log(pageHtml.substring(0, 500));
+      console.log('...\n');
       
       throw new Error('Bypass link not found');
     }
     
     console.log('✅ Bypass link extracted!');
-    console.log(`🔗 ${bypassLink}\n`);
+    console.log(`🔗 ${bypassLink.substring(0, 100)}...\n`);
     
-    // Validate
+    // Validate link
     if (!bypassLink.includes('trilogyoptic.com')) {
-      throw new Error('Invalid link format');
+      throw new Error('Invalid link - missing store domain');
     }
     
     // Check expiration
@@ -152,17 +155,17 @@ async function regenerateLink() {
         console.log(`⏰ Valid for: ${minutesLeft} minutes\n`);
       }
     } catch (e) {
-      console.log('ℹ️  No expiration data in link\n');
+      console.log('ℹ️  No _bt expiration data\n');
     }
     
-    // Update HTML
+    // Update HTML file
     updateHtmlFile(bypassLink);
     
   } catch (error) {
     console.error('❌ Error:', error.message);
     if (error.response) {
       console.error('Status:', error.response.status);
-      console.error('Data:', JSON.stringify(error.response.data).substring(0, 200));
+      console.error('Data:', JSON.stringify(error.response.data, null, 2).substring(0, 500));
     }
     process.exit(1);
   }
@@ -218,7 +221,7 @@ function updateHtmlFile(bypassLink) {
 <!-- Updated: ${new Date().toISOString()} -->`;
   
   fs.writeFileSync('./index.html', html);
-  console.log('✅ index.html updated!\n');
+  console.log('✅ index.html updated successfully!\n');
   console.log('✨ Done!\n');
 }
 
