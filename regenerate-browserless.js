@@ -57,9 +57,9 @@ async function regenerateLink() {
               timeout: 60000
             ) {
               status
-            }
-            content(html: "html") {
-              text
+              content {
+                text
+              }
             }
           }
         `,
@@ -86,7 +86,7 @@ async function regenerateLink() {
     }
     
     const result = response.data.data;
-    const pageHtml = result.content?.text || '';
+    const pageHtml = result.goto?.content?.text || '';
     const status = result.goto?.status;
     
     console.log(`📄 Page status: ${status}`);
