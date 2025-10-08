@@ -59,11 +59,8 @@ async function regenerateLink() {
               status
               url
             }
-            waitForTimeout(time: 5000) {
+            waitForTimeout(time: 8000) {
               time
-            }
-            waitForSelector(selector: ".Polaris-Button[aria-label*='View your store']", timeout: 30000) {
-              selector
             }
             html {
               html
