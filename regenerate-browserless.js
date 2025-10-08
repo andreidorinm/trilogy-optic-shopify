@@ -59,8 +59,11 @@ async function regenerateLink() {
               status
               url
             }
-            waitForTimeout(time: 2000) {
+            waitForTimeout(time: 5000) {
               time
+            }
+            waitForSelector(selector: "a[href*='trilogyoptic.com']", timeout: 30000) {
+              selector
             }
             html {
               html
