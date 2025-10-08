@@ -1,16 +1,17 @@
-name: Regenerate Shopify Store Link
+name: Regenerate Shopify Bypass Link
 
 on:
   schedule:
-    - cron: '0 */6 * * *'  # Every 6 hours
-  workflow_dispatch:
+    # Run every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch: # Allow manual trigger
 
 jobs:
   regenerate:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -18,45 +19,32 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
-          cache: 'npm'
-      
-      - name: Cache Puppeteer browser
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/puppeteer
-          key: ${{ runner.os }}-puppeteer-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-puppeteer-
+          node-version: '20'
       
       - name: Install dependencies
-        run: npm ci
+        run: npm install
       
-      - name: Run regeneration script
+      - name: Run regeneration script with proxy
         env:
           SHOPIFY_COOKIES: ${{ secrets.SHOPIFY_COOKIES }}
+          DECODO_PROXY_USERNAME: ${{ secrets.DECODO_PROXY_USERNAME }}
+          DECODO_PROXY_PASSWORD: ${{ secrets.DECODO_PROXY_PASSWORD }}
           CI: 'true'
         run: node regenerate-browserless.js
       
-      - name: Upload debug artifacts (always)
+      - name: Commit and push if changed
+        run: |
+          git config --global user.name 'GitHub Action'
+          git config --global user.email 'action@github.com'
+          git add index.html
+          git diff --quiet && git diff --staged --quiet || (git commit -m "🔄 Auto-update bypass link [$(date +'%Y-%m-%d %H:%M:%S')]" && git push)
+      
+      - name: Upload screenshots as artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-files-${{ github.run_number }}
+          name: screenshots-${{ github.run_number }}
           path: |
             *.png
             page-content.html
-          if-no-files-found: warn
-      
-      - name: Commit and push updated files
-        if: success()
-        run: |
-          git config user.name "GitHub Actions Bot"
-          git config user.email "actions@github.com"
-          git add index.html
-          if git diff --quiet && git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "🔄 Auto-update store link - $(date -u +'%Y-%m-%d %H:%M UTC')"
-            git push
-          fi
+          retention-days: 7

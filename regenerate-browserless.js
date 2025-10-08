@@ -6,9 +6,11 @@ require('dotenv').config();
 puppeteer.use(StealthPlugin());
 
 async function regenerateLink() {
-  console.log('🚀 Starting local Puppeteer automation...\n');
+  console.log('🚀 Starting Puppeteer automation with proxy support...\n');
   
   const cookiesJson = process.env.SHOPIFY_COOKIES;
+  const decodoPRoxyUsername = process.env.DECODO_PROXY_USERNAME;
+  const decodoPRoxyPassword = process.env.DECODO_PROXY_PASSWORD;
   
   if (!cookiesJson) {
     throw new Error('Missing SHOPIFY_COOKIES in .env');
@@ -33,7 +35,8 @@ async function regenerateLink() {
   
   console.log(`🍪 Loaded ${validCookies.length} cookies\n`);
   
-  const browser = await puppeteer.launch({
+  // Configure browser with or without proxy
+  const launchOptions = {
     headless: process.env.CI === 'true' ? 'new' : false,
     args: [
       '--no-sandbox',
@@ -42,10 +45,31 @@ async function regenerateLink() {
       '--disable-dev-shm-usage',
       '--disable-gpu'
     ]
-  });
+  };
+  
+  // Add proxy if credentials are provided
+  if (decodoPRoxyUsername && decodoPRoxyPassword) {
+    // Using Decodo residential proxy endpoint.port format
+    const proxyUrl = `gate.decodo.com:10001`;
+    launchOptions.args.push(`--proxy-server=http://${proxyUrl}`);
+    console.log('🌐 Using residential proxy:', proxyUrl);
+  } else {
+    console.log('ℹ️  No proxy configured - running without proxy\n');
+  }
+  
+  const browser = await puppeteer.launch(launchOptions);
   
   try {
     const page = await browser.newPage();
+    
+    // Authenticate with proxy if credentials are provided
+    if (decodoPRoxyUsername && decodoPRoxyPassword) {
+      await page.authenticate({
+        username: decodoPRoxyUsername,
+        password: decodoPRoxyPassword
+      });
+      console.log('✅ Proxy authentication set\n');
+    }
 
     // Set viewport
     await page.setViewport({ width: 1920, height: 1080 });
