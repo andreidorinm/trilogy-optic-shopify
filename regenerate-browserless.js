@@ -95,6 +95,7 @@ async function regenerateLink() {
     const status = result.goto?.status;
     
     console.log(`📄 Page status: ${status}`);
+    console.log(`🌐 Final URL: ${result.goto?.url || 'unknown'}`);
     console.log(`📏 Content length: ${pageHtml.length} characters\n`);
     
     if (!pageHtml || pageHtml.length === 0) {
@@ -110,10 +111,15 @@ async function regenerateLink() {
       throw new Error('Cloudflare blocking - saved to cloudflare-block.html');
     }
     
-    // Check for login redirect
-    if (pageHtml.includes('login') || pageHtml.includes('accounts.shopify.com')) {
-      console.log('❌ Redirected to login - cookies expired\n');
-      throw new Error('Session expired - refresh cookies');
+    // Check for actual login page (not just mentions of login)
+    const isLoginPage = pageHtml.includes('accounts.shopify.com/store-login') ||
+                        (pageHtml.includes('<title>') && pageHtml.match(/<title>[^<]*Log in[^<]*<\/title>/i)) ||
+                        pageHtml.includes('name="account[email]"');
+    
+    if (isLoginPage) {
+      console.log('❌ Redirected to actual login page - cookies expired\n');
+      fs.writeFileSync('login-page.html', pageHtml);
+      throw new Error('Session expired - refresh cookies (saved to login-page.html)');
     }
     
     // Extract bypass link
