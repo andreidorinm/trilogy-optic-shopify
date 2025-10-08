@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "server-browserless.js",
   "scripts": {
-    "start": "node server-browserless.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.21.1",
