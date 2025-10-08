@@ -67,7 +67,7 @@ async function regenerateLink() {
               time
             }
             scroll: evaluate(
-              snippet: """
+              code: """
                 window.scrollTo(0, document.body.scrollHeight / 2);
                 return true;
               """
@@ -78,7 +78,7 @@ async function regenerateLink() {
               time
             }
             extractLink: evaluate(
-              snippet: """
+              code: """
                 (() => {
                   // Wait for the link to appear, check every 500ms for up to 40 seconds
                   return new Promise((resolve) => {
