@@ -2,8 +2,8 @@ name: Regenerate Shopify Store Link
 
 on:
   schedule:
-    - cron: '0 */12 * * *'  # Every 12 hours
-  workflow_dispatch:  # Manual trigger button
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
 
 jobs:
   regenerate:
@@ -19,23 +19,40 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: '18'
+          cache: 'npm'
+      
+      - name: Cache Puppeteer browser
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/puppeteer
+          key: ${{ runner.os }}-puppeteer-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-puppeteer-
       
       - name: Install dependencies
-        run: npm install
+        run: npm ci
       
       - name: Run regeneration script
         env:
           SHOPIFY_COOKIES: ${{ secrets.SHOPIFY_COOKIES }}
           CI: 'true'
-          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'false'
         run: node regenerate-browserless.js
+      
+      - name: Upload debug artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: debug-files
+          path: |
+            *.png
+            page-content.html
       
       - name: Commit and push updated files
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
           git add index.html
-          if git diff --staged --quiet; then
+          if git diff --quiet && git diff --staged --quiet; then
             echo "No changes to commit"
           else
             git commit -m "🔄 Auto-update store link - $(date -u +'%Y-%m-%d %H:%M UTC')"

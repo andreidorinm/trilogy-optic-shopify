@@ -31,7 +31,7 @@ async function regenerateLink() {
   console.log(`🍪 Loaded ${validCookies.length} cookies\n`);
   
   const browser = await puppeteer.launch({
-    headless: 'new',
+    headless: process.env.CI === 'true' ? 'new' : false,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -44,28 +44,14 @@ async function regenerateLink() {
   try {
     const page = await browser.newPage();
     
+    // Set viewport
+    await page.setViewport({ width: 1920, height: 1080 });
+    
     // Set cookies
     await page.setCookie(...validCookies);
     console.log('✅ Cookies set\n');
     
-    // Navigate to Shopify admin themes page
-    console.log('🌐 Navigating to themes page...');
-    await page.goto('https://admin.shopify.com/store/trilogyopticdemo/themes', {
-      waitUntil: 'networkidle2',
-      timeout: 60000
-    });
-    
-    console.log('📸 Taking screenshot 1...');
-    await page.screenshot({ path: 'step1-before-click.png' });
-    
-    // Wait for the page to be interactive
-    console.log('⏳ Waiting for page to be ready...');
-    await page.waitForFunction(
-      () => document.readyState === 'complete',
-      { timeout: 30000 }
-    );
-    
-    // CRITICAL: Set up listeners BEFORE clicking to catch the temporary URL
+    // CRITICAL: Set up listeners BEFORE navigation to catch the temporary URL
     let capturedLink = null;
     let capturedFromPopup = null;
     
@@ -74,12 +60,14 @@ async function regenerateLink() {
       if (target.type() === 'page') {
         console.log('🔔 New page/popup detected!');
         const newPage = await target.page();
-        const url = newPage.url();
-        console.log('🔗 Popup URL:', url);
-        
-        if (url.includes('_bt=')) {
-          capturedFromPopup = url;
-          console.log('✅ CAPTURED LINK FROM POPUP!');
+        if (newPage) {
+          const url = newPage.url();
+          console.log('🔗 Popup URL:', url);
+          
+          if (url.includes('_bt=')) {
+            capturedFromPopup = url;
+            console.log('✅ CAPTURED LINK FROM POPUP!');
+          }
         }
       }
     });
@@ -108,37 +96,91 @@ async function regenerateLink() {
       request.continue();
     });
     
+    // Navigate to Shopify admin themes page
+    console.log('🌐 Navigating to themes page...');
+    await page.goto('https://admin.shopify.com/store/trilogyopticdemo/themes', {
+      waitUntil: 'networkidle2',
+      timeout: 60000
+    });
+    
+    console.log('📸 Taking screenshot 1...');
+    await page.screenshot({ path: 'step1-before-click.png' });
+    
+    // Wait for the page to be interactive
+    console.log('⏳ Waiting for page to be ready...');
+    await page.waitForFunction(
+      () => document.readyState === 'complete',
+      { timeout: 30000 }
+    );
+    
+    // Extra wait for React/dynamic content to load
+    await page.waitForTimeout(5000);
+    
     // Try to find the View store button
     console.log('🔍 Looking for "View your online store" button...');
     
+    // Wait for page body
+    await page.waitForSelector('body', { timeout: 30000 });
+    
+    // Take a debug screenshot
+    await page.screenshot({ path: 'debug-page.png', fullPage: true });
+    console.log('📸 Saved debug screenshot');
+    
+    // Get page content for debugging
+    const pageText = await page.evaluate(() => document.body.innerText);
+    console.log('📄 Page preview:', pageText.substring(0, 300));
+    
+    // Try to find button
     let buttonSelector = null;
     
-    // Strategy 1: Try aria-label
+    // Strategy 1: Wait for any button
     try {
-      await page.waitForSelector('button[aria-label*="View"]', { timeout: 5000 });
-      buttonSelector = 'button[aria-label*="View"]';
-      console.log('✅ Found button by aria-label');
+      await page.waitForSelector('button', { timeout: 10000 });
+      console.log('✅ Found some buttons on page');
     } catch (e) {
-      console.log('⚠️  Button not found by aria-label, trying text content...');
+      console.log('⚠️  No buttons found at all');
     }
     
-    // Strategy 2: Try by text content
-    if (!buttonSelector) {
-      buttonSelector = await page.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll('button, a'));
-        const viewButton = buttons.find(btn => {
-          const text = btn.textContent || btn.getAttribute('aria-label') || '';
-          return text.toLowerCase().includes('view') && 
-                 text.toLowerCase().includes('store');
-        });
-        
-        if (viewButton) {
-          viewButton.setAttribute('data-view-store', 'true');
-          return '[data-view-store="true"]';
-        }
-        return null;
+    // Strategy 2: Find the button by multiple methods
+    buttonSelector = await page.evaluate(() => {
+      // Look for the button in multiple ways
+      const searches = [
+        // By aria-label
+        document.querySelector('button[aria-label*="View"]'),
+        document.querySelector('a[aria-label*="View"]'),
+        document.querySelector('button[aria-label*="view"]'),
+        document.querySelector('a[aria-label*="view"]'),
+      ];
+      
+      // By text content
+      const allElements = Array.from(document.querySelectorAll('button, a'));
+      const textSearch = allElements.find(el => {
+        const text = (el.textContent || '').toLowerCase();
+        const label = (el.getAttribute('aria-label') || '').toLowerCase();
+        return (text.includes('view') && text.includes('store')) ||
+               (label.includes('view') && label.includes('store')) ||
+               text.includes('view your online store') ||
+               label.includes('view your online store');
       });
-    }
+      
+      if (textSearch) searches.push(textSearch);
+      
+      // By data attributes
+      searches.push(
+        document.querySelector('[data-primary-action="VIEW_STORE"]'),
+        document.querySelector('button[data-action*="view"]')
+      );
+      
+      const button = searches.find(el => el);
+      
+      if (button) {
+        button.setAttribute('data-found-button', 'true');
+        console.log('Found button:', button.textContent || button.getAttribute('aria-label'));
+        return '[data-found-button="true"]';
+      }
+      
+      return null;
+    });
     
     if (buttonSelector) {
       console.log(`✅ Found button with selector: ${buttonSelector}\n`);
@@ -148,8 +190,8 @@ async function regenerateLink() {
       await page.click(buttonSelector);
       console.log('🖱️  Clicked button!');
       
-      // Wait a moment for the link to be captured
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      // Wait for the link to be captured
+      await page.waitForTimeout(5000);
       
       console.log('📸 Taking screenshot 2...');
       await page.screenshot({ path: 'step2-after-click.png' });
@@ -176,20 +218,41 @@ async function regenerateLink() {
         } else {
           console.log('❌ No _bt link found anywhere.');
           console.log('💾 Check page-content.html and screenshots manually.');
+          throw new Error('Bypass link not found');
         }
       }
     } else {
       console.log('❌ Could not find the View store button');
-      await page.screenshot({ path: 'error-no-button.png' });
+      
+      // Debug: List all buttons on the page
+      const allButtons = await page.evaluate(() => {
+        return Array.from(document.querySelectorAll('button, a'))
+          .slice(0, 20)
+          .map(el => ({
+            tag: el.tagName,
+            text: el.textContent?.substring(0, 100),
+            ariaLabel: el.getAttribute('aria-label'),
+            classes: el.className,
+            id: el.id
+          }));
+      });
+      
+      console.log('🔍 First 20 buttons/links on page:');
+      console.log(JSON.stringify(allButtons, null, 2));
+      
+      await page.screenshot({ path: 'error-no-button.png', fullPage: true });
       
       const html = await page.content();
       fs.writeFileSync('page-content.html', html);
       console.log('💾 Saved HTML for inspection');
+      
+      throw new Error('Could not find View store button');
     }
     
   } catch (error) {
     console.error('❌ Error:', error.message);
     console.error(error.stack);
+    throw error;
   } finally {
     await browser.close();
   }
