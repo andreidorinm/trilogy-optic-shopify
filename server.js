@@ -39,7 +39,7 @@ async function getAuthenticatedCookies() {
     console.log('🔐 Authenticating via Browserless...');
     
     const response = await axios.post(
-      `https://chrome.browserless.io/function?token=${BROWSERLESS_TOKEN}`,
+        `https://production-sfo.browserless.io/function?token=${BROWSERLESS_TOKEN}`,
       {
         code: `
           module.exports = async ({ page }) => {
