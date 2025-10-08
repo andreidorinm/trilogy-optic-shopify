@@ -40,8 +40,12 @@ async function regenerateLink() {
     
     console.log('🌐 Calling Browserless BrowserQL endpoint...');
     
+    // Add proxy parameters if needed (uncomment to enable residential proxy)
+    const useProxy = false; // Set to true if bot detection is an issue
+    const proxyParams = useProxy ? '&proxy=residential&proxyCountry=us' : '';
+    
     const response = await axios.post(
-      `https://production-sfo.browserless.io/chromium/bql?token=${browserlessToken}`,
+      `https://production-sfo.browserless.io/chromium/bql?token=${browserlessToken}${proxyParams}`,
       {
         query: `
           mutation GetPageContent($url: String!, $cookies: [CookieInput!]!) {
@@ -59,12 +63,54 @@ async function regenerateLink() {
               status
               url
             }
-            waitForTimeout(time: 8000) {
+            waitForTimeout(time: 5000) {
               time
             }
-            html {
-              html
+            scroll: evaluate(
+              snippet: """
+                window.scrollTo(0, document.body.scrollHeight / 2);
+                return true;
+              """
+            ) {
+              value
+            }
+            waitForTimeout2: waitForTimeout(time: 2000) {
               time
+            }
+            extractLink: evaluate(
+              snippet: """
+                (() => {
+                  // Wait for the link to appear, check every 500ms for up to 40 seconds
+                  return new Promise((resolve) => {
+                    let attempts = 0;
+                    const maxAttempts = 80;
+                    
+                    const checkForLink = () => {
+                      attempts++;
+                      
+                      // Look for any link containing trilogyoptic.com
+                      const links = document.querySelectorAll('a[href*="trilogyoptic.com"]');
+                      
+                      if (links.length > 0) {
+                        console.log('Found link after ' + attempts + ' attempts');
+                        resolve(links[0].href);
+                      } else if (attempts >= maxAttempts) {
+                        console.log('No link found after ' + maxAttempts + ' attempts');
+                        // Return some debug info
+                        const allLinks = document.querySelectorAll('a');
+                        console.log('Total links on page: ' + allLinks.length);
+                        resolve(null);
+                      } else {
+                        setTimeout(checkForLink, 500);
+                      }
+                    };
+                    
+                    checkForLink();
+                  });
+                })()
+              """
+            ) {
+              value
             }
           }
         `,
@@ -91,91 +137,20 @@ async function regenerateLink() {
     }
     
     const result = response.data.data;
-    const pageHtml = result.html?.html || '';
+    const bypassLink = result.extractLink?.value;
     const status = result.goto?.status;
+    const finalUrl = result.goto?.url;
     
     console.log(`📄 Page status: ${status}`);
-    console.log(`🌐 Final URL: ${result.goto?.url || 'unknown'}`);
-    console.log(`📏 Content length: ${pageHtml.length} characters\n`);
+    console.log(`🌐 Final URL: ${finalUrl}\n`);
     
-    if (!pageHtml || pageHtml.length === 0) {
-      console.log('❌ No HTML content received\n');
-      console.log('Response structure:', JSON.stringify(result, null, 2).substring(0, 500));
-      throw new Error('Empty HTML content - possible cookie or navigation issue');
-    }
-    
-    // Check for Cloudflare block
-    if (pageHtml.includes('Just a moment')) {
-      console.log('❌ Still blocked by Cloudflare\n');
-      fs.writeFileSync('cloudflare-block.html', pageHtml);
-      throw new Error('Cloudflare blocking - saved to cloudflare-block.html');
-    }
-    
-    // Check for actual login page (not just mentions of login)
-    const isLoginPage = pageHtml.includes('accounts.shopify.com/store-login') ||
-                        (pageHtml.includes('<title>') && pageHtml.match(/<title>[^<]*Log in[^<]*<\/title>/i)) ||
-                        pageHtml.includes('name="account[email]"');
-    
-    if (isLoginPage) {
-      console.log('❌ Redirected to actual login page - cookies expired\n');
-      fs.writeFileSync('login-page.html', pageHtml);
-      throw new Error('Session expired - refresh cookies (saved to login-page.html)');
-    }
-    
-    // Extract bypass link
-    console.log('🔍 Extracting bypass link from HTML...');
-    
-    const patterns = [
-      /https:\/\/trilogyoptic\.com\/\?[^"'\s]*_bt=[^"'\s]*/,
-      /href=["']([^"']*trilogyoptic\.com[^"']*_bt=[^"']*)["']/,
-      /https:\/\/trilogyoptic\.com\/\?[^"'\s]*preview_theme_id=[^"'\s]*/,
-      /(https:\/\/trilogyoptic\.com\/\?[^"'\s]*key=[^"'\s]*preview_theme_id=[^"'\s]*)/,
-      /href=["']([^"']*trilogyoptic\.com[^"']*)["']/  // Catch any trilogyoptic.com link
-    ];
-    
-    let bypassLink = null;
-    
-    for (let i = 0; i < patterns.length; i++) {
-      const match = pageHtml.match(patterns[i]);
-      if (match) {
-        bypassLink = match[1] || match[0];
-        // Decode HTML entities
-        bypassLink = bypassLink
-          .replace(/&amp;/g, '&')
-          .replace(/&quot;/g, '"')
-          .replace(/&#x27;/g, "'")
-          .replace(/&lt;/g, '<')
-          .replace(/&gt;/g, '>');
-        console.log(`✅ Found link with pattern ${i + 1}\n`);
-        break;
-      }
-    }
-    
-    if (!bypassLink) {
-      console.log('❌ No bypass link found in HTML\n');
-      
-      // Save for debugging
-      fs.writeFileSync('page-debug.html', pageHtml);
-      console.log('📄 Saved HTML to page-debug.html\n');
-      
-      // Try to find any trilogyoptic.com links
-      console.log('🔍 Searching for any trilogyoptic.com links...');
-      const allTrilogyLinks = pageHtml.match(/https?:\/\/[^"'\s]*trilogyoptic\.com[^"'\s]*/gi);
-      if (allTrilogyLinks && allTrilogyLinks.length > 0) {
-        console.log(`Found ${allTrilogyLinks.length} trilogyoptic.com link(s):`);
-        allTrilogyLinks.slice(0, 5).forEach((link, i) => {
-          console.log(`  ${i + 1}. ${link.substring(0, 120)}...`);
-        });
-        console.log('');
-      } else {
-        console.log('  No trilogyoptic.com links found at all!\n');
-      }
-      
-      // Show snippet
-      console.log('HTML snippet (first 500 chars):');
-      console.log(pageHtml.substring(0, 500));
-      console.log('...\n');
-      
+    if (!bypassLink || bypassLink === 'null') {
+      console.log('❌ No bypass link found after waiting 30 seconds\n');
+      console.log('The page loaded but the link never appeared.');
+      console.log('This could mean:');
+      console.log('  1. The theme is not published/available');
+      console.log('  2. The cookies need refreshing');
+      console.log('  3. The page structure changed\n');
       throw new Error('Bypass link not found');
     }
     
