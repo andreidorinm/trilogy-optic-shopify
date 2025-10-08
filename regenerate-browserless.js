@@ -47,13 +47,18 @@ async function regenerateLink() {
           mutation GetPageContent($url: String!, $cookies: [CookieInput!]!) {
             goto(
               url: $url
-              cookies: $cookies
-              waitUntil: networkidle
+              waitUntil: networkIdle
               timeout: 60000
             ) {
               status
+              setCookies(cookies: $cookies) {
+                name
+                value
+              }
             }
-            content
+            content(html: "html") {
+              text
+            }
           }
         `,
         variables: {
@@ -79,7 +84,7 @@ async function regenerateLink() {
     }
     
     const result = response.data.data;
-    const pageHtml = result.content;
+    const pageHtml = result.content?.text || '';
     const status = result.goto?.status;
     
     console.log(`📄 Page status: ${status}`);
