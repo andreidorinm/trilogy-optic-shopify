@@ -57,9 +57,14 @@ async function regenerateLink() {
               timeout: 60000
             ) {
               status
-              content {
-                text
-              }
+              url
+            }
+            waitForTimeout(time: 2000) {
+              time
+            }
+            html {
+              html
+              time
             }
           }
         `,
@@ -86,11 +91,17 @@ async function regenerateLink() {
     }
     
     const result = response.data.data;
-    const pageHtml = result.goto?.content?.text || '';
+    const pageHtml = result.html?.html || '';
     const status = result.goto?.status;
     
     console.log(`📄 Page status: ${status}`);
     console.log(`📏 Content length: ${pageHtml.length} characters\n`);
+    
+    if (!pageHtml || pageHtml.length === 0) {
+      console.log('❌ No HTML content received\n');
+      console.log('Response structure:', JSON.stringify(result, null, 2).substring(0, 500));
+      throw new Error('Empty HTML content - possible cookie or navigation issue');
+    }
     
     // Check for Cloudflare block
     if (pageHtml.includes('Just a moment')) {
