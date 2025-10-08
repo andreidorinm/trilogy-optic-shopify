@@ -45,16 +45,18 @@ async function regenerateLink() {
       {
         query: `
           mutation GetPageContent($url: String!, $cookies: [CookieInput!]!) {
+            setCookies: cookies(cookies: $cookies) {
+              cookies {
+                name
+                value
+              }
+            }
             goto(
               url: $url
               waitUntil: networkIdle
               timeout: 60000
             ) {
               status
-              setCookies(cookies: $cookies) {
-                name
-                value
-              }
             }
             content(html: "html") {
               text
