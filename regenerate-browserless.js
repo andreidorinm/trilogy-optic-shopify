@@ -20,101 +20,86 @@ async function regenerateLink() {
   try {
     console.log('🌐 Calling Browserless API...');
     
+    // Parse cookies
+    const cookies = JSON.parse(cookiesJson);
+    
+    // Convert cookies to Browserless format
+    const browserlessCookies = cookies.map(c => ({
+      name: c.name,
+      value: c.value,
+      domain: c.domain,
+      path: c.path || '/',
+      expires: c.expirationDate,
+      httpOnly: c.httpOnly || false,
+      secure: c.secure || false,
+      sameSite: c.sameSite || 'Lax'
+    }));
+    
     const response = await axios.post(
-      `https://production-sfo.browserless.io/function?token=${browserlessToken}`,
+      `https://production-sfo.browserless.io/content?token=${browserlessToken}`,
       {
-        code: `
-          async ({ page }) => {
-            const cookies = ${cookiesJson};
-            
-            console.log('Setting cookies...');
-            const puppeteerCookies = cookies.map(c => ({
-              name: c.name,
-              value: c.value,
-              domain: c.domain,
-              path: c.path || '/',
-              expires: c.expirationDate,
-              httpOnly: c.httpOnly || false,
-              secure: c.secure || false,
-              sameSite: c.sameSite || 'Lax'
-            }));
-            
-            await page.setCookie(...puppeteerCookies);
-            console.log('Cookies set');
-            
-            console.log('Navigating to Shopify...');
-            await page.goto('https://admin.shopify.com/store/trilogyopticdemo/themes', {
-              waitUntil: 'networkidle2',
-              timeout: 60000
-            });
-            
-            console.log('Page loaded, waiting...');
-            await page.waitForTimeout(5000);
-            
-            const title = await page.title();
-            console.log('Page title:', title);
-            
-            if (title.includes('Just a moment')) {
-              throw new Error('Still blocked by Cloudflare');
-            }
-            
-            console.log('Looking for bypass link...');
-            const links = await page.evaluate(() => {
-              return Array.from(document.querySelectorAll('a')).map(a => ({
-                text: a.textContent.trim(),
-                href: a.href
-              }));
-            });
-            
-            console.log('Found', links.length, 'links');
-            
-            // Find the bypass link
-            let bypassLink = null;
-            for (const link of links) {
-              if (link.href && link.href.includes('_bt=') && link.href.includes('trilogyoptic.com')) {
-                bypassLink = link.href;
-                break;
-              }
-            }
-            
-            if (!bypassLink) {
-              // Try alternative method
-              const viewButton = links.find(l => 
-                l.text.toLowerCase().includes('view') && 
-                l.text.toLowerCase().includes('store')
-              );
-              if (viewButton) {
-                bypassLink = viewButton.href;
-              }
-            }
-            
-            return bypassLink;
-          }
-        `
+        url: 'https://admin.shopify.com/store/trilogyopticdemo/themes',
+        cookies: browserlessCookies,
+        waitFor: 5000,
+        gotoOptions: {
+          waitUntil: 'networkidle2',
+          timeout: 60000
+        }
       },
       {
-        timeout: 120000,
+        timeout: 90000,
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache'
         }
       }
     );
     
-    const bypassLink = response.data;
+    const pageHtml = response.data;
     
-    console.log('📦 Response received\n');
+    console.log('📦 Page content received');
+    console.log(`📏 Content length: ${pageHtml.length} characters\n`);
     
-    if (!bypassLink) {
-      console.log('❌ No bypass link returned');
-      console.log('Response:', JSON.stringify(response.data, null, 2));
-      throw new Error('Bypass link not found');
+    // Check if we got blocked
+    if (pageHtml.includes('Just a moment')) {
+      console.log('❌ Still blocked by Cloudflare');
+      throw new Error('Cloudflare blocking access');
     }
     
-    if (!bypassLink.includes('_bt=')) {
-      console.log('❌ Invalid bypass link format');
-      console.log('Received:', bypassLink);
-      throw new Error('Invalid bypass link');
+    // Check if redirected to login
+    if (pageHtml.includes('accounts.shopify.com') || pageHtml.includes('login')) {
+      console.log('❌ Redirected to login - cookies expired');
+      throw new Error('Session expired - refresh cookies');
     }
+    
+    console.log('🔍 Searching for bypass link in HTML...');
+    
+    // Extract bypass link from HTML
+    const btLinkMatch = pageHtml.match(/https:\/\/trilogyoptic\.com\/\?[^"'\s]*_bt=[^"'\s]*/);
+    
+    if (!btLinkMatch) {
+      console.log('❌ No bypass link found in page HTML');
+      
+      // Save HTML for debugging
+      fs.writeFileSync('page-debug.html', pageHtml);
+      console.log('📄 Saved page HTML to page-debug.html for inspection\n');
+      
+      // Try alternative regex patterns
+      const altMatch = pageHtml.match(/href="([^"]*_bt=[^"]*)"/);
+      if (altMatch) {
+        const bypassLink = altMatch[1].replace(/&amp;/g, '&');
+        console.log('✅ Found link with alternative method');
+        console.log(`🔗 ${bypassLink}\n`);
+        return updateHtmlFile(bypassLink);
+      }
+      
+      throw new Error('Bypass link not found in page');
+    }
+    
+    let bypassLink = btLinkMatch[0];
+    
+    // Decode HTML entities
+    bypassLink = bypassLink.replace(/&amp;/g, '&');
     
     console.log('✅ Bypass link extracted!');
     console.log(`🔗 ${bypassLink.substring(0, 100)}...\n`);
@@ -134,8 +119,20 @@ async function regenerateLink() {
       console.log('⚠️  Could not decode expiration\n');
     }
     
-    // Update index.html
-    const html = `<!DOCTYPE html>
+    updateHtmlFile(bypassLink);
+    
+  } catch (error) {
+    console.error('❌ Error:', error.message);
+    if (error.response) {
+      console.error('Response status:', error.response.status);
+      console.error('Response data:', error.response.data);
+    }
+    process.exit(1);
+  }
+}
+
+function updateHtmlFile(bypassLink) {
+  const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -182,19 +179,10 @@ async function regenerateLink() {
 </body>
 </html>
 <!-- Updated: ${new Date().toISOString()} -->`;
-    
-    fs.writeFileSync('./index.html', html);
-    console.log('✅ index.html updated successfully\n');
-    console.log('✨ Done!\n');
-    
-  } catch (error) {
-    console.error('❌ Error:', error.message);
-    if (error.response) {
-      console.error('Response status:', error.response.status);
-      console.error('Response data:', error.response.data);
-    }
-    process.exit(1);
-  }
+  
+  fs.writeFileSync('./index.html', html);
+  console.log('✅ index.html updated successfully\n');
+  console.log('✨ Done!\n');
 }
 
 regenerateLink();
