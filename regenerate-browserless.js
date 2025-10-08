@@ -23,24 +23,38 @@ async function regenerateLink() {
     // Parse cookies
     const cookies = JSON.parse(cookiesJson);
     
-    // Convert cookies to Browserless format
-    const browserlessCookies = cookies.map(c => ({
-      name: c.name,
-      value: c.value,
-      domain: c.domain,
-      path: c.path || '/',
-      expires: c.expirationDate,
-      httpOnly: c.httpOnly || false,
-      secure: c.secure || false,
-      sameSite: c.sameSite || 'Lax'
-    }));
+    // Convert cookies to Browserless format with validation
+    const browserlessCookies = cookies.map(c => {
+      // Normalize sameSite value
+      let sameSite = 'Lax'; // Default
+      if (c.sameSite) {
+        const normalized = c.sameSite.toLowerCase();
+        if (normalized === 'lax') sameSite = 'Lax';
+        else if (normalized === 'strict') sameSite = 'Strict';
+        else if (normalized === 'none') sameSite = 'None';
+        else if (normalized === 'no_restriction') sameSite = 'None';
+        else sameSite = 'Lax'; // Fallback
+      }
+      
+      return {
+        name: c.name,
+        value: c.value,
+        domain: c.domain,
+        path: c.path || '/',
+        expires: c.expirationDate,
+        httpOnly: c.httpOnly || false,
+        secure: c.secure || false,
+        sameSite: sameSite
+      };
+    });
+    
+    console.log(`📊 Converted ${browserlessCookies.length} cookies\n`);
     
     const response = await axios.post(
       `https://production-sfo.browserless.io/content?token=${browserlessToken}`,
       {
         url: 'https://admin.shopify.com/store/trilogyopticdemo/themes',
         cookies: browserlessCookies,
-        waitFor: 5000,
         gotoOptions: {
           waitUntil: 'networkidle2',
           timeout: 60000
@@ -74,35 +88,51 @@ async function regenerateLink() {
     
     console.log('🔍 Searching for bypass link in HTML...');
     
-    // Extract bypass link from HTML
-    const btLinkMatch = pageHtml.match(/https:\/\/trilogyoptic\.com\/\?[^"'\s]*_bt=[^"'\s]*/);
+    // Extract bypass link from HTML - try multiple patterns
+    let bypassLink = null;
     
-    if (!btLinkMatch) {
+    // Pattern 1: Direct URL with _bt parameter
+    const btLinkMatch = pageHtml.match(/https:\/\/trilogyoptic\.com\/\?[^"'\s]*_bt=[^"'\s]*/);
+    if (btLinkMatch) {
+      bypassLink = btLinkMatch[0];
+    }
+    
+    // Pattern 2: href attribute
+    if (!bypassLink) {
+      const hrefMatch = pageHtml.match(/href="([^"]*trilogyoptic\.com[^"]*_bt=[^"]*)"/);
+      if (hrefMatch) {
+        bypassLink = hrefMatch[1];
+      }
+    }
+    
+    // Pattern 3: Any link with preview_theme_id and key
+    if (!bypassLink) {
+      const previewMatch = pageHtml.match(/https:\/\/trilogyoptic\.com\/\?[^"'\s]*preview_theme_id=[^"'\s]*/);
+      if (previewMatch) {
+        bypassLink = previewMatch[0];
+      }
+    }
+    
+    if (!bypassLink) {
       console.log('❌ No bypass link found in page HTML');
       
       // Save HTML for debugging
       fs.writeFileSync('page-debug.html', pageHtml);
       console.log('📄 Saved page HTML to page-debug.html for inspection\n');
       
-      // Try alternative regex patterns
-      const altMatch = pageHtml.match(/href="([^"]*_bt=[^"]*)"/);
-      if (altMatch) {
-        const bypassLink = altMatch[1].replace(/&amp;/g, '&');
-        console.log('✅ Found link with alternative method');
-        console.log(`🔗 ${bypassLink}\n`);
-        return updateHtmlFile(bypassLink);
-      }
-      
       throw new Error('Bypass link not found in page');
     }
-    
-    let bypassLink = btLinkMatch[0];
     
     // Decode HTML entities
     bypassLink = bypassLink.replace(/&amp;/g, '&');
     
     console.log('✅ Bypass link extracted!');
     console.log(`🔗 ${bypassLink.substring(0, 100)}...\n`);
+    
+    // Validate link
+    if (!bypassLink.includes('trilogyoptic.com')) {
+      throw new Error('Invalid bypass link - does not contain store URL');
+    }
     
     // Check expiration
     try {
@@ -116,7 +146,7 @@ async function regenerateLink() {
         console.log(`⏰ Valid for: ${minutesLeft} minutes\n`);
       }
     } catch (e) {
-      console.log('⚠️  Could not decode expiration\n');
+      console.log('⚠️  Could not decode expiration (link might not have _bt parameter)\n');
     }
     
     updateHtmlFile(bypassLink);
