@@ -50,7 +50,8 @@ async function regenerateLink() {
   // Add proxy if credentials are provided
   if (decodoPRoxyUsername && decodoPRoxyPassword) {
     // Using Decodo residential proxy endpoint.port format
-    const proxyUrl = `gate.decodo.com:10001`;
+    // Try different ports: 10001, 10002, 10003, 10004, 10005
+    const proxyUrl = `gate.decodo.com:10002`; // Changed from 10001 to 10002
     launchOptions.args.push(`--proxy-server=http://${proxyUrl}`);
     console.log('🌐 Using residential proxy:', proxyUrl);
   } else {
@@ -97,6 +98,17 @@ async function regenerateLink() {
     
     // Enable request interception
     await page.setRequestInterception(true);
+    
+    // Block unnecessary resources to save bandwidth (but keep JS!)
+    const blockedResourceTypes = ['image', 'font', 'media']; // Removed 'stylesheet' - need some CSS
+    const blockedDomains = [
+      'googletagmanager.com',
+      'google-analytics.com',
+      'facebook.com',
+      'doubleclick.net',
+      'hotjar.com',
+      'mouseflow.com',
+    ];
     
     // Listen for responses to capture the bypass URL from API calls
     page.on('response', async (response) => {
@@ -158,6 +170,31 @@ async function regenerateLink() {
     // Also intercept requests
     page.on('request', (request) => {
       const url = request.url();
+      const resourceType = request.resourceType();
+      
+      // Block images from CDN (product images, etc.) but keep icons/UI images
+      if (resourceType === 'image' && (
+        url.includes('cdn.shopify.com/s/files') ||
+        url.includes('cdn.shopify.com/shopifycloud/brochure') ||
+        url.includes('/products/') ||
+        url.includes('_large') ||
+        url.includes('_medium')
+      )) {
+        request.abort();
+        return;
+      }
+      
+      // Block other heavy resource types
+      if (['font', 'media'].includes(resourceType)) {
+        request.abort();
+        return;
+      }
+      
+      // Block unnecessary domains
+      if (blockedDomains.some(domain => url.includes(domain))) {
+        request.abort();
+        return;
+      }
       
       if (url.includes('_bt=') || url.includes('preview_theme_id')) {
         console.log('📍 Request with bypass params:', url);
@@ -206,7 +243,10 @@ async function regenerateLink() {
     });
     
     console.log('📸 Taking screenshot 1...');
-    await page.screenshot({ path: 'step1-before-click.png' });
+    if (process.env.CI !== 'true') {
+      // Only take screenshots locally, not in CI to save bandwidth
+      await page.screenshot({ path: 'step1-before-click.png' });
+    }
     
     // Wait for the page to be interactive
     console.log('⏳ Waiting for page to be ready...');
@@ -215,8 +255,8 @@ async function regenerateLink() {
       { timeout: 30000 }
     );
     
-    // Extra wait for React/dynamic content to load
-    await page.waitForTimeout(5000);
+    // Extra wait for React/dynamic content to load (reduced from 5s to 3s)
+    await page.waitForTimeout(3000);
     
     // Try to find the View store button
     console.log('🔍 Looking for "View your online store" button...');
@@ -225,8 +265,10 @@ async function regenerateLink() {
     await page.waitForSelector('body', { timeout: 30000 });
     
     // Take a debug screenshot
-    await page.screenshot({ path: 'debug-page.png', fullPage: true });
-    console.log('📸 Saved debug screenshot');
+    if (process.env.CI !== 'true') {
+      await page.screenshot({ path: 'debug-page.png', fullPage: true });
+      console.log('📸 Saved debug screenshot');
+    }
     
     // Get page content for debugging
     const pageText = await page.evaluate(() => document.body.innerText);
@@ -292,11 +334,13 @@ async function regenerateLink() {
       await page.click(buttonSelector);
       console.log('🖱️  Clicked button!');
       
-      // Wait for the API call and popup
-      await page.waitForTimeout(5000);
+      // Wait for the API call and popup (reduced from 5s to 3s)
+      await page.waitForTimeout(3000);
       
       console.log('📸 Taking screenshot 2...');
-      await page.screenshot({ path: 'step2-after-click.png' });
+      if (process.env.CI !== 'true') {
+        await page.screenshot({ path: 'step2-after-click.png' });
+      }
       
       // Check what we captured
       if (capturedBypassUrl) {
@@ -342,9 +386,11 @@ async function regenerateLink() {
       
       await page.screenshot({ path: 'error-no-button.png', fullPage: true });
       
-      const html = await page.content();
-      fs.writeFileSync('page-content.html', html);
-      console.log('💾 Saved HTML for inspection');
+      if (process.env.CI !== 'true') {
+        const html = await page.content();
+        fs.writeFileSync('page-content.html', html);
+        console.log('💾 Saved HTML for inspection');
+      }
       
       throw new Error('Could not find View store button');
     }
@@ -397,6 +443,18 @@ function updateHtmlFile(bypassLink) {
       margin: 20px auto;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+    
+    /* Hide Shopify preview bar */
+    iframe[id*="preview-bar"],
+    div[class*="preview-bar"],
+    #shopify-preview-bar,
+    [data-shopify-preview-bar] {
+      display: none !important;
+      visibility: hidden !important;
+      opacity: 0 !important;
+      height: 0 !important;
+      pointer-events: none !important;
+    }
   </style>
 </head>
 <body>
@@ -408,6 +466,23 @@ function updateHtmlFile(bypassLink) {
   </div>
   <script>
     setTimeout(() => window.location.href = '${bypassLink}', 100);
+    
+    // Additional script to hide preview bar after redirect
+    window.addEventListener('load', () => {
+      setTimeout(() => {
+        const style = document.createElement('style');
+        style.textContent = \`
+          iframe[id*="preview-bar"],
+          div[class*="preview-bar"],
+          #shopify-preview-bar,
+          [data-shopify-preview-bar] {
+            display: none !important;
+            visibility: hidden !important;
+          }
+        \`;
+        document.head.appendChild(style);
+      }, 500);
+    });
   </script>
 </body>
 </html>
