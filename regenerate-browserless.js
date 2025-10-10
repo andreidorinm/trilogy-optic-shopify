@@ -98,6 +98,20 @@ async function regenerateLink() {
     // Enable request interception
     await page.setRequestInterception(true);
 
+    // OPTIMIZATION: Block non-essential resources to save bandwidth
+    // This blocks ONLY heavy content that admin UI doesn't need to function
+    const blockedDomains = [
+      'googletagmanager.com',
+      'google-analytics.com',
+      'facebook.com',
+      'doubleclick.net',
+      'hotjar.com',
+      'mouseflow.com',
+      'segment.com',
+      'amplitude.com',
+      'mixpanel.com'
+    ];
+
     // Listen for responses to capture the bypass URL from API calls
     page.on('response', async (response) => {
       const url = response.url();
@@ -158,6 +172,30 @@ async function regenerateLink() {
     // Also intercept requests
     page.on('request', (request) => {
       const url = request.url();
+      const resourceType = request.resourceType();
+
+      // OPTIMIZATION: Block analytics and tracking (safe - not needed for functionality)
+      if (blockedDomains.some(domain => url.includes(domain))) {
+        request.abort();
+        return;
+      }
+
+      // OPTIMIZATION: Block large media files but keep small UI assets
+      if (resourceType === 'media') {
+        request.abort();
+        return;
+      }
+
+      // OPTIMIZATION: Block very large product images (not UI icons)
+      if (resourceType === 'image' && (
+        url.includes('_2048x') || 
+        url.includes('_1024x') ||
+        url.includes('_large.') ||
+        url.includes('_grande.')
+      )) {
+        request.abort();
+        return;
+      }
 
       if (url.includes('_bt=') || url.includes('preview_theme_id')) {
         console.log('📍 Request with bypass params:', url);
@@ -205,8 +243,11 @@ async function regenerateLink() {
       timeout: 60000
     });
 
-    console.log('📸 Taking screenshot 1...');
-    await page.screenshot({ path: 'step1-before-click.png' });
+    // OPTIMIZATION: Skip screenshots in CI to save bandwidth
+    if (process.env.CI !== 'true') {
+      console.log('📸 Taking screenshot 1...');
+      await page.screenshot({ path: 'step1-before-click.png' });
+    }
 
     // Wait for the page to be interactive
     console.log('⏳ Waiting for page to be ready...');
@@ -224,9 +265,11 @@ async function regenerateLink() {
     // Wait for page body
     await page.waitForSelector('body', { timeout: 30000 });
 
-    // Take a debug screenshot
-    await page.screenshot({ path: 'debug-page.png', fullPage: true });
-    console.log('📸 Saved debug screenshot');
+    // OPTIMIZATION: Skip debug screenshot in CI
+    if (process.env.CI !== 'true') {
+      await page.screenshot({ path: 'debug-page.png', fullPage: true });
+      console.log('📸 Saved debug screenshot');
+    }
 
     // Get page content for debugging
     const pageText = await page.evaluate(() => document.body.innerText);
@@ -295,8 +338,11 @@ async function regenerateLink() {
       // Wait for the API call and popup
       await page.waitForTimeout(5000);
 
-      console.log('📸 Taking screenshot 2...');
-      await page.screenshot({ path: 'step2-after-click.png' });
+      // OPTIMIZATION: Skip screenshot in CI
+      if (process.env.CI !== 'true') {
+        console.log('📸 Taking screenshot 2...');
+        await page.screenshot({ path: 'step2-after-click.png' });
+      }
 
       // Check what we captured
       if (capturedBypassUrl) {
@@ -311,11 +357,14 @@ async function regenerateLink() {
     } else {
       console.log('❌ Could not find the View store button');
 
-      await page.screenshot({ path: 'error-no-button.png', fullPage: true });
-
-      const html = await page.content();
-      fs.writeFileSync('page-content.html', html);
-      console.log('💾 Saved HTML for inspection');
+      // OPTIMIZATION: Skip error screenshot in CI
+      if (process.env.CI !== 'true') {
+        await page.screenshot({ path: 'error-no-button.png', fullPage: true });
+        
+        const html = await page.content();
+        fs.writeFileSync('page-content.html', html);
+        console.log('💾 Saved HTML for inspection');
+      }
 
       throw new Error('Could not find View store button');
     }
@@ -390,3 +439,15 @@ function updateHtmlFile(bypassLink) {
 }
 
 module.exports = { regenerateLink };
+
+if (require.main === module) {
+  regenerateLink()
+    .then(() => {
+      console.log('✅ Script completed successfully');
+      process.exit(0);
+    })
+    .catch((error) => {
+      console.error('❌ Script failed:', error);
+      process.exit(1);
+    });
+}
