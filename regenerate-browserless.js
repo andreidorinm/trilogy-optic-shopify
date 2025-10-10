@@ -462,7 +462,7 @@ function updateHtmlFile(bypassLink) {
     <div class="logo">👓</div>
     <h1>Trilogy Optic</h1>
     <div class="spinner"></div>
-    <p>Opening demo store...</p>
+    <p>Bun venit la Trilogy Optic...</p>
   </div>
   <script>
     setTimeout(() => window.location.href = '${bypassLink}', 100);
