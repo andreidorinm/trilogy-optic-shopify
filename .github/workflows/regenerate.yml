@@ -2,11 +2,10 @@ name: Regenerate Shopify Bypass Link
 
 on:
   schedule:
-    # Run every hour
-    - cron: '0 * * * *'
+    # Run every 55 minutes (since URLs expire in 1 hour)
+    - cron: '*/55 * * * *'  # 26 runs/day = 104MB (small savings)
   workflow_dispatch: # Allow manual trigger
 
-# IMPORTANT: Grant write permissions to the workflow
 permissions:
   contents: write
 
@@ -24,9 +23,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
       
       - name: Install dependencies
-        run: npm install
+        run: npm ci --prefer-offline --no-audit
       
       - name: Run regeneration script with proxy
         env:
@@ -34,24 +34,33 @@ jobs:
           DECODO_PROXY_USERNAME: ${{ secrets.DECODO_PROXY_USERNAME }}
           DECODO_PROXY_PASSWORD: ${{ secrets.DECODO_PROXY_PASSWORD }}
           CI: 'true'
+          NODE_ENV: 'production'
         run: node regenerate-browserless.js
       
       - name: Commit and push if changed
+        id: git-check
         run: |
           git config --global user.name 'GitHub Action'
           git config --global user.email 'action@github.com'
           git add index.html
-          # Clean up debug files that shouldn't be committed
-          git checkout -- debug-page.png error-no-button.png page-content.html step1-before-click.png step2-after-click.png 2>/dev/null || true
-          # Commit and push only if index.html changed
-          git diff --quiet && git diff --staged --quiet || (git commit -m "🔄 Auto-update bypass link [$(date +'%Y-%m-%d %H:%M:%S')]" && git push)
+          
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            git commit -m "🔄 Auto-update bypass link [skip ci]"
+            git push
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
       
-      - name: Upload screenshots as artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: screenshots-${{ github.run_number }}
-          path: |
-            *.png
-            page-content.html
-          retention-days: 7
+      - name: Purge Cloudflare Cache
+        if: steps.git-check.outputs.changed == 'true'
+        env:
+          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: |
+          echo "Purging Cloudflare cache..."
+          curl -X POST "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data '{"files":["https://magazin.trilogyoptic.com/","https://magazin.trilogyoptic.com/index.html"]}'
