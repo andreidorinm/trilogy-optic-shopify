@@ -342,7 +342,7 @@ function updateHtmlFile(bypassLink) {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="refresh" content="0;url=${bypassLink}">
-  <title>Trilogy Optic - Demo Store</title>
+  <title>Trilogy Optic</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -375,7 +375,7 @@ function updateHtmlFile(bypassLink) {
     <div class="logo">👓</div>
     <h1>Trilogy Optic</h1>
     <div class="spinner"></div>
-    <p>Opening demo store...</p>
+    <p>Bine ai venit!</p>
   </div>
   <script>
     setTimeout(() => window.location.href = '${bypassLink}', 100);
