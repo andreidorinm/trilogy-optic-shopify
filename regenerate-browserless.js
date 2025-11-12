@@ -1,16 +1,12 @@
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const { chromium } = require('playwright');
 const fs = require('fs');
 require('dotenv').config();
 
-puppeteer.use(StealthPlugin());
-
 async function regenerateLink() {
-  console.log('🚀 Starting Puppeteer automation with proxy support...\n');
+  console.log('🚀 Starting Playwright automation...\n');
 
   const cookiesJson = process.env.SHOPIFY_COOKIES;
-  const decodoPRoxyUsername = process.env.DECODO_PROXY_USERNAME;
-  const decodoPRoxyPassword = process.env.DECODO_PROXY_PASSWORD;
+  const isCI = process.env.CI === 'true';
 
   if (!cookiesJson) {
     throw new Error('Missing SHOPIFY_COOKIES in .env');
@@ -18,91 +14,63 @@ async function regenerateLink() {
 
   const cookies = JSON.parse(cookiesJson);
 
-  // Filter valid cookies
+  // Filter and fix valid cookies
   const now = Date.now() / 1000;
   const validCookies = cookies
     .filter(c => !c.session && (!c.expirationDate || c.expirationDate >= now))
-    .map(c => ({
-      name: c.name,
-      value: c.value,
-      domain: c.domain.startsWith('.') ? c.domain : '.' + c.domain,
-      path: c.path || '/',
-      expires: c.expirationDate ? Math.floor(c.expirationDate) : undefined,
-      httpOnly: c.httpOnly || false,
-      secure: c.secure || false,
-      sameSite: c.sameSite || 'Lax'
-    }));
+    .map(c => {
+      let sameSite = 'Lax';
+      if (c.sameSite === 'no_restriction' || c.sameSite === 'None') {
+        sameSite = 'None';
+      } else if (c.sameSite === 'strict' || c.sameSite === 'Strict') {
+        sameSite = 'Strict';
+      } else if (c.sameSite === 'lax' || c.sameSite === 'Lax') {
+        sameSite = 'Lax';
+      }
+
+      return {
+        name: c.name,
+        value: c.value,
+        domain: c.domain.startsWith('.') ? c.domain : '.' + c.domain,
+        path: c.path || '/',
+        expires: c.expirationDate ? Math.floor(c.expirationDate) : -1,
+        httpOnly: c.httpOnly || false,
+        secure: c.secure || false,
+        sameSite: sameSite
+      };
+    });
 
   console.log(`🍪 Loaded ${validCookies.length} cookies\n`);
 
-  // Configure browser with or without proxy
-  const launchOptions = {
-    headless: process.env.CI === 'true' ? 'new' : false,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-blink-features=AutomationControlled',
-      '--disable-dev-shm-usage',
-      '--disable-gpu'
-    ]
-  };
+  // Launch browser
+  const browser = await chromium.launch({
+    headless: isCI,
+  });
 
-  // Add proxy if credentials are provided
-  if (decodoPRoxyUsername && decodoPRoxyPassword) {
-    // Using Decodo residential proxy endpoint.port format
-    const proxyUrl = `gate.decodo.com:10001`;
-    launchOptions.args.push(`--proxy-server=http://${proxyUrl}`);
-    console.log('🌐 Using residential proxy:', proxyUrl);
-  } else {
-    console.log('ℹ️  No proxy configured - running without proxy\n');
-  }
-
-  const browser = await puppeteer.launch(launchOptions);
+  console.log(isCI ? '🤖 Running in GitHub Actions (headless)' : '💻 Running locally (headed)');
+  console.log('ℹ️  Using authenticated cookies (no proxy)\n');
 
   try {
-    const page = await browser.newPage();
-
-    // Authenticate with proxy if credentials are provided
-    if (decodoPRoxyUsername && decodoPRoxyPassword) {
-      await page.authenticate({
-        username: decodoPRoxyUsername,
-        password: decodoPRoxyPassword
-      });
-      console.log('✅ Proxy authentication set\n');
-    }
-
-    // Set viewport
-    await page.setViewport({ width: 1920, height: 1080 });
-
-    // Add realistic user agent and headers
-    await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-
-    await page.setExtraHTTPHeaders({
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Connection': 'keep-alive',
-      'Upgrade-Insecure-Requests': '1',
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'none'
+    const context = await browser.newContext({
+      viewport: { width: 1920, height: 1080 },
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      extraHTTPHeaders: {
+        'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      }
     });
 
-    // Set cookies
-    await page.setCookie(...validCookies);
+    await context.addCookies(validCookies);
     console.log('✅ Cookies set\n');
 
-    // CRITICAL: Capture the bypass URL from API responses
+    const page = await context.newPage();
+
     let capturedBypassUrl = null;
 
-    // Enable request interception
-    await page.setRequestInterception(true);
-
-    // Listen for responses to capture the bypass URL from API calls
+    // Listen for API responses
     page.on('response', async (response) => {
       const url = response.url();
 
-      // Look for the preview session creation API call
       if (url.includes('CreateProductDetailsPagePreviewSessionMutation') || 
           url.includes('preview') || 
           url.includes('_bt=')) {
@@ -111,27 +79,22 @@ async function regenerateLink() {
 
         try {
           const contentType = response.headers()['content-type'];
-
-          if (contentType && contentType.includes('application/json')) {
+          if (contentType?.includes('application/json')) {
             const responseBody = await response.text();
             console.log('📦 Response body preview:', responseBody.substring(0, 500));
 
-            // Try to parse JSON
             try {
               const json = JSON.parse(responseBody);
               const jsonStr = JSON.stringify(json);
 
-              // Look for URLs with _bt parameter in the response
               const btMatch = jsonStr.match(/(https?:\/\/[^"'\s\\]*_bt=[^"'\s\\&]*)/i);
               if (btMatch) {
-                // Decode any escaped characters
                 let foundUrl = btMatch[0].replace(/\\\//g, '/');
                 capturedBypassUrl = foundUrl;
                 console.log('✅ FOUND BYPASS URL IN API RESPONSE!');
                 console.log('🔗', capturedBypassUrl);
               }
 
-              // Also look for preview_theme_id which might be in a separate field
               const previewMatch = jsonStr.match(/(https?:\/\/[^"'\s\\]*preview_theme_id=[^"'\s\\&]*)/i);
               if (previewMatch && !capturedBypassUrl) {
                 let foundUrl = previewMatch[0].replace(/\\\//g, '/');
@@ -140,7 +103,6 @@ async function regenerateLink() {
                 console.log('🔗', capturedBypassUrl);
               }
             } catch (e) {
-              // Not JSON, check raw text
               const btMatch = responseBody.match(/(https?:\/\/[^"'\s]*_bt=[^"'\s&]*)/i);
               if (btMatch) {
                 capturedBypassUrl = btMatch[0];
@@ -155,7 +117,6 @@ async function regenerateLink() {
       }
     });
 
-    // Also intercept requests
     page.on('request', (request) => {
       const url = request.url();
 
@@ -166,163 +127,89 @@ async function regenerateLink() {
           console.log('✅ CAPTURED FROM REQUEST!');
         }
       }
-
-      request.continue();
     });
 
-    // Listen for new popup pages
-    browser.on('targetcreated', async (target) => {
-      if (target.type() === 'page') {
-        console.log('🔔 New popup detected!');
-        try {
-          const newPage = await target.page();
+    context.on('page', async (newPage) => {
+      console.log('🔔 New popup/tab detected!');
+      
+      try {
+        const url = newPage.url();
+        console.log('🔗 Popup URL:', url);
 
-          if (newPage) {
-            // Check the initial URL
-            const initialUrl = newPage.url();
-            console.log('🔗 Popup URL:', initialUrl);
-
-            if ((initialUrl.includes('_bt=') || initialUrl.includes('preview_theme_id')) && !capturedBypassUrl) {
-              capturedBypassUrl = initialUrl;
-              console.log('✅ CAPTURED FROM POPUP URL!');
-            }
-
-            // Close popup after a moment
-            setTimeout(() => {
-              newPage.close().catch(() => {});
-            }, 2000);
-          }
-        } catch (error) {
-          console.log('⚠️ Error accessing popup:', error.message);
+        if ((url.includes('_bt=') || url.includes('preview_theme_id')) && !capturedBypassUrl) {
+          capturedBypassUrl = url;
+          console.log('✅ CAPTURED FROM POPUP URL!');
         }
+
+        setTimeout(() => {
+          newPage.close().catch(() => {});
+        }, 2000);
+      } catch (error) {
+        console.log('⚠️ Error accessing popup:', error.message);
       }
     });
 
-    // Navigate to Shopify admin themes page
     console.log('🌐 Navigating to themes page...');
     await page.goto('https://admin.shopify.com/store/trilogyopticdemo/themes', {
-      waitUntil: 'networkidle2',
+      waitUntil: 'domcontentloaded',
       timeout: 60000
     });
 
-    console.log('📸 Taking screenshot 1...');
+    console.log('✅ Page loaded!');
     await page.screenshot({ path: 'step1-before-click.png' });
 
-    // Wait for the page to be interactive
-    console.log('⏳ Waiting for page to be ready...');
-    await page.waitForFunction(
-      () => document.readyState === 'complete',
-      { timeout: 30000 }
-    );
+    console.log('⏳ Waiting for page to be interactive...');
+    await page.waitForLoadState('load');
+    await page.waitForTimeout(3000);
 
-    // Extra wait for React/dynamic content to load
-    await page.waitForTimeout(5000);
-
-    // Try to find the View store button
     console.log('🔍 Looking for "View your online store" button...');
 
-    // Wait for page body
-    await page.waitForSelector('body', { timeout: 30000 });
-
-    // Take a debug screenshot
-    await page.screenshot({ path: 'debug-page.png', fullPage: true });
-    console.log('📸 Saved debug screenshot');
-
-    // Get page content for debugging
-    const pageText = await page.evaluate(() => document.body.innerText);
-    console.log('📄 Page preview:', pageText.substring(0, 300));
-
-    // Try to find button
-    let buttonSelector = null;
-
-    // Strategy 1: Wait for any button
+    // Try to expand Online Store section
     try {
-      await page.waitForSelector('button', { timeout: 10000 });
-      console.log('✅ Found some buttons on page');
+      const onlineStoreButton = page.locator('button:has-text("Online Store"), a:has-text("Online Store")').first();
+      if (await onlineStoreButton.count() > 0) {
+        await onlineStoreButton.click({ force: true });
+        await page.waitForTimeout(1000);
+      }
     } catch (e) {
-      console.log('⚠️  No buttons found at all');
+      // Ignore if already expanded
     }
 
-    // Strategy 2: Find the button by multiple methods
-    buttonSelector = await page.evaluate(() => {
-      // Look for the button in multiple ways
-      const searches = [
-        // By aria-label
-        document.querySelector('button[aria-label*="View"]'),
-        document.querySelector('a[aria-label*="View"]'),
-        document.querySelector('button[aria-label*="view"]'),
-        document.querySelector('a[aria-label*="view"]'),
-      ];
+    await page.screenshot({ path: 'debug-page.png', fullPage: true });
 
-      // By text content
-      const allElements = Array.from(document.querySelectorAll('button, a'));
-      const textSearch = allElements.find(el => {
-        const text = (el.textContent || '').toLowerCase();
-        const label = (el.getAttribute('aria-label') || '').toLowerCase();
-        return (text.includes('view') && text.includes('store')) ||
-               (label.includes('view') && label.includes('store')) ||
-               text.includes('view your online store') ||
-               label.includes('view your online store');
-      });
+    const button = page.locator('button[aria-label="View your online store"], a[aria-label="View your online store"]').first();
+    
+    if (await button.count() > 0) {
+      console.log('✅ Found View button!');
+      
+      await button.scrollIntoViewIfNeeded().catch(() => {});
+      await page.waitForTimeout(500);
+      
+      console.log('🎯 Clicking button...');
+      await button.click({ force: true });
+      console.log('🖱️  Clicked!');
 
-      if (textSearch) searches.push(textSearch);
-
-      // By data attributes
-      searches.push(
-        document.querySelector('[data-primary-action="VIEW_STORE"]'),
-        document.querySelector('button[data-action*="view"]')
-      );
-
-      const button = searches.find(el => el);
-
-      if (button) {
-        button.setAttribute('data-found-button', 'true');
-        console.log('Found button:', button.textContent || button.getAttribute('aria-label'));
-        return '[data-found-button="true"]';
-      }
-
-      return null;
-    });
-
-    if (buttonSelector) {
-      console.log(`✅ Found button with selector: ${buttonSelector}\n`);
-      console.log('🎯 Now clicking and listening for the API response...\n');
-
-      // Click the button
-      await page.click(buttonSelector);
-      console.log('🖱️  Clicked button!');
-
-      // Wait for the API call and popup
       await page.waitForTimeout(5000);
-
-      console.log('📸 Taking screenshot 2...');
       await page.screenshot({ path: 'step2-after-click.png' });
 
-      // Check what we captured
       if (capturedBypassUrl) {
         console.log('\n🎉 SUCCESS! Captured bypass URL:', capturedBypassUrl);
         updateHtmlFile(capturedBypassUrl);
         return capturedBypassUrl;
       } else {
-        console.log('⚠️  No bypass URL was captured from API or popup');
         throw new Error('Failed to capture bypass URL');
       }
 
     } else {
       console.log('❌ Could not find the View store button');
-
       await page.screenshot({ path: 'error-no-button.png', fullPage: true });
-
       const html = await page.content();
       fs.writeFileSync('page-content.html', html);
-      console.log('💾 Saved HTML for inspection');
-
       throw new Error('Could not find View store button');
     }
 
   } catch (error) {
     console.error('❌ Error:', error.message);
-    console.error(error.stack);
     throw error;
   } finally {
     await browser.close();
@@ -330,11 +217,7 @@ async function regenerateLink() {
 }
 
 function updateHtmlFile(bypassLink) {
-  // Clean the link - handle URL encoded characters
-  bypassLink = bypassLink.trim();
-
-  // If the URL has escaped slashes, fix them
-  bypassLink = bypassLink.replace(/\\\//g, '/');
+  bypassLink = bypassLink.trim().replace(/\\\//g, '/');
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -386,12 +269,8 @@ function updateHtmlFile(bypassLink) {
 
   fs.writeFileSync('./index.html', html);
   console.log('✅ index.html updated successfully!');
-  console.log('✨ Done!\n');
 }
 
-module.exports = { regenerateLink };
-
-// Add this to actually run the function when called directly:
 if (require.main === module) {
   regenerateLink()
     .then(() => {

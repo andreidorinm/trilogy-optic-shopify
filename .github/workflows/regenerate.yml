@@ -3,7 +3,7 @@ name: Regenerate Shopify Bypass Link
 on:
   schedule:
     # Run every 55 minutes (since URLs expire in 1 hour)
-    - cron: '*/55 * * * *'  # 26 runs/day = 104MB (small savings)
+    - cron: '*/55 * * * *'
   workflow_dispatch: # Allow manual trigger
 
 permissions:
@@ -28,14 +28,27 @@ jobs:
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit
       
-      - name: Run regeneration script with proxy
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+      
+      - name: Run regeneration script
         env:
           SHOPIFY_COOKIES: ${{ secrets.SHOPIFY_COOKIES }}
-          DECODO_PROXY_USERNAME: ${{ secrets.DECODO_PROXY_USERNAME }}
-          DECODO_PROXY_PASSWORD: ${{ secrets.DECODO_PROXY_PASSWORD }}
           CI: 'true'
           NODE_ENV: 'production'
         run: node regenerate-browserless.js
+      
+      - name: Upload screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: |
+            step1-before-click.png
+            debug-page.png
+            error-no-button.png
+            step2-after-click.png
+          if-no-files-found: ignore
       
       - name: Commit and push if changed
         id: git-check
