@@ -2,9 +2,8 @@ name: Regenerate Shopify Bypass Link
 
 on:
   schedule:
-    # Run every 55 minutes (since URLs expire in 1 hour)
     - cron: '*/55 * * * *'
-  workflow_dispatch: # Allow manual trigger
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -34,6 +33,10 @@ jobs:
       - name: Run regeneration script
         env:
           SHOPIFY_COOKIES: ${{ secrets.SHOPIFY_COOKIES }}
+          IPROYAL_ISP_HOST: ${{ secrets.IPROYAL_ISP_HOST }}
+          IPROYAL_ISP_PORT: ${{ secrets.IPROYAL_ISP_PORT }}
+          IPROYAL_ISP_USERNAME: ${{ secrets.IPROYAL_ISP_USERNAME }}
+          IPROYAL_ISP_PASSWORD: ${{ secrets.IPROYAL_ISP_PASSWORD }}
           CI: 'true'
           NODE_ENV: 'production'
         run: node regenerate-browserless.js
