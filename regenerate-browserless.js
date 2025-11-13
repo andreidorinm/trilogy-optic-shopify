@@ -50,17 +50,18 @@ async function regenerateLink() {
 
   console.log(`🍪 Loaded ${validCookies.length} cookies\n`);
 
-  // Launch browser with optional proxy
+  // Launch browser with optional proxy - UPDATED APPROACH
   const launchOptions = {
     headless: isCI,
+    args: []
   };
 
   if (useProxy) {
-    launchOptions.proxy = {
-      server: `http://${iproyalHost}:${iproyalPort}`,
-      username: iproyalUsername,
-      password: iproyalPassword
-    };
+    // Use Chrome's proxy args instead of Playwright's proxy config
+    // This format works better with authenticated proxies
+    launchOptions.args.push(
+      `--proxy-server=http://${iproyalHost}:${iproyalPort}`
+    );
     console.log(`🌐 Using IPRoyal Static ISP Proxy`);
     console.log(`   Host: ${iproyalHost}`);
     console.log(`   Port: ${iproyalPort}`);
@@ -80,7 +81,14 @@ async function regenerateLink() {
       extraHTTPHeaders: {
         'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      }
+      },
+      // Add proxy authentication via HTTP header if using proxy
+      ...(useProxy ? {
+        httpCredentials: {
+          username: iproyalUsername,
+          password: iproyalPassword
+        }
+      } : {})
     });
 
     await context.addCookies(validCookies);
