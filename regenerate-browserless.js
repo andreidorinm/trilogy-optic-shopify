@@ -7,6 +7,14 @@ async function regenerateLink() {
 
   const cookiesJson = process.env.SHOPIFY_COOKIES;
   const isCI = process.env.CI === 'true';
+  
+  // IPRoyal Static ISP configuration
+  const iproyalHost = process.env.IPROYAL_ISP_HOST;
+  const iproyalPort = process.env.IPROYAL_ISP_PORT;
+  const iproyalUsername = process.env.IPROYAL_ISP_USERNAME;
+  const iproyalPassword = process.env.IPROYAL_ISP_PASSWORD;
+  
+  const useProxy = isCI && iproyalHost && iproyalPort && iproyalUsername && iproyalPassword;
 
   if (!cookiesJson) {
     throw new Error('Missing SHOPIFY_COOKIES in .env');
@@ -42,13 +50,28 @@ async function regenerateLink() {
 
   console.log(`🍪 Loaded ${validCookies.length} cookies\n`);
 
-  // Launch browser
-  const browser = await chromium.launch({
+  // Launch browser with optional proxy
+  const launchOptions = {
     headless: isCI,
-  });
+  };
+
+  if (useProxy) {
+    launchOptions.proxy = {
+      server: `http://${iproyalHost}:${iproyalPort}`,
+      username: iproyalUsername,
+      password: iproyalPassword
+    };
+    console.log(`🌐 Using IPRoyal Static ISP Proxy`);
+    console.log(`   Host: ${iproyalHost}`);
+    console.log(`   Port: ${iproyalPort}`);
+    console.log(`   Location: Spain 🇪🇸`);
+  }
 
   console.log(isCI ? '🤖 Running in GitHub Actions (headless)' : '💻 Running locally (headed)');
-  console.log('ℹ️  Using authenticated cookies (no proxy)\n');
+  console.log(useProxy ? '✅ Proxy enabled' : 'ℹ️  No proxy (direct connection)');
+  console.log('');
+
+  const browser = await chromium.launch(launchOptions);
 
   try {
     const context = await browser.newContext({
@@ -70,143 +93,87 @@ async function regenerateLink() {
     // Listen for API responses
     page.on('response', async (response) => {
       const url = response.url();
-
       if (url.includes('CreateProductDetailsPagePreviewSessionMutation') || 
           url.includes('preview') || 
           url.includes('_bt=')) {
-
-        console.log('🎯 Found preview-related response:', url);
-
+        console.log('🎯 Found preview-related response');
         try {
           const contentType = response.headers()['content-type'];
           if (contentType?.includes('application/json')) {
             const responseBody = await response.text();
-            console.log('📦 Response body preview:', responseBody.substring(0, 500));
-
-            try {
-              const json = JSON.parse(responseBody);
-              const jsonStr = JSON.stringify(json);
-
-              const btMatch = jsonStr.match(/(https?:\/\/[^"'\s\\]*_bt=[^"'\s\\&]*)/i);
-              if (btMatch) {
-                let foundUrl = btMatch[0].replace(/\\\//g, '/');
-                capturedBypassUrl = foundUrl;
-                console.log('✅ FOUND BYPASS URL IN API RESPONSE!');
-                console.log('🔗', capturedBypassUrl);
-              }
-
-              const previewMatch = jsonStr.match(/(https?:\/\/[^"'\s\\]*preview_theme_id=[^"'\s\\&]*)/i);
-              if (previewMatch && !capturedBypassUrl) {
-                let foundUrl = previewMatch[0].replace(/\\\//g, '/');
-                capturedBypassUrl = foundUrl;
-                console.log('✅ FOUND PREVIEW URL IN API RESPONSE!');
-                console.log('🔗', capturedBypassUrl);
-              }
-            } catch (e) {
-              const btMatch = responseBody.match(/(https?:\/\/[^"'\s]*_bt=[^"'\s&]*)/i);
-              if (btMatch) {
-                capturedBypassUrl = btMatch[0];
-                console.log('✅ FOUND BYPASS URL IN RESPONSE TEXT!');
-                console.log('🔗', capturedBypassUrl);
-              }
+            const json = JSON.parse(responseBody);
+            const jsonStr = JSON.stringify(json);
+            const btMatch = jsonStr.match(/(https?:\/\/[^"'\s\\]*_bt=[^"'\s\\&]*)/i);
+            if (btMatch) {
+              capturedBypassUrl = btMatch[0].replace(/\\\//g, '/');
+              console.log('✅ FOUND BYPASS URL!');
             }
           }
-        } catch (error) {
-          console.log('⚠️ Could not read response body:', error.message);
-        }
+        } catch (e) {}
       }
     });
 
     page.on('request', (request) => {
       const url = request.url();
-
-      if (url.includes('_bt=') || url.includes('preview_theme_id')) {
-        console.log('📍 Request with bypass params:', url);
-        if (!capturedBypassUrl) {
-          capturedBypassUrl = url;
-          console.log('✅ CAPTURED FROM REQUEST!');
-        }
+      if ((url.includes('_bt=') || url.includes('preview_theme_id')) && !capturedBypassUrl) {
+        capturedBypassUrl = url;
+        console.log('✅ CAPTURED FROM REQUEST!');
       }
     });
 
     context.on('page', async (newPage) => {
-      console.log('🔔 New popup/tab detected!');
-      
       try {
         const url = newPage.url();
-        console.log('🔗 Popup URL:', url);
-
         if ((url.includes('_bt=') || url.includes('preview_theme_id')) && !capturedBypassUrl) {
           capturedBypassUrl = url;
-          console.log('✅ CAPTURED FROM POPUP URL!');
+          console.log('✅ CAPTURED FROM POPUP!');
         }
-
-        setTimeout(() => {
-          newPage.close().catch(() => {});
-        }, 2000);
-      } catch (error) {
-        console.log('⚠️ Error accessing popup:', error.message);
-      }
+        setTimeout(() => newPage.close().catch(() => {}), 2000);
+      } catch (e) {}
     });
 
-    console.log('🌐 Navigating to themes page...');
+    console.log('🌐 Navigating to Shopify...');
     await page.goto('https://admin.shopify.com/store/trilogyopticdemo/themes', {
       waitUntil: 'domcontentloaded',
       timeout: 60000
     });
 
-    console.log('✅ Page loaded!');
-    await page.screenshot({ path: 'step1-before-click.png' });
-
-    console.log('⏳ Waiting for page to be interactive...');
+    console.log('✅ Page loaded');
     await page.waitForLoadState('load');
-    await page.waitForTimeout(3000);
-
-    console.log('🔍 Looking for "View your online store" button...');
-
-    // Try to expand Online Store section
-    try {
-      const onlineStoreButton = page.locator('button:has-text("Online Store"), a:has-text("Online Store")').first();
-      if (await onlineStoreButton.count() > 0) {
-        await onlineStoreButton.click({ force: true });
-        await page.waitForTimeout(1000);
-      }
-    } catch (e) {
-      // Ignore if already expanded
-    }
-
+    await page.waitForTimeout(5000);
+    
     await page.screenshot({ path: 'debug-page.png', fullPage: true });
 
-    const button = page.locator('button[aria-label="View your online store"], a[aria-label="View your online store"]').first();
+    // Try to expand Online Store
+    try {
+      const onlineStore = page.locator('text="Online Store"').first();
+      if (await onlineStore.count() > 0) {
+        await onlineStore.click({ force: true });
+        await page.waitForTimeout(2000);
+      }
+    } catch (e) {}
+
+    // Find and click View button
+    const button = page.locator('button[aria-label*="View"], a[aria-label*="View"]').first();
     
     if (await button.count() > 0) {
-      console.log('✅ Found View button!');
-      
+      console.log('✅ Found View button');
       await button.scrollIntoViewIfNeeded().catch(() => {});
       await page.waitForTimeout(500);
-      
-      console.log('🎯 Clicking button...');
       await button.click({ force: true });
-      console.log('🖱️  Clicked!');
-
+      console.log('🖱️ Clicked!');
+      
       await page.waitForTimeout(5000);
-      await page.screenshot({ path: 'step2-after-click.png' });
 
       if (capturedBypassUrl) {
-        console.log('\n🎉 SUCCESS! Captured bypass URL:', capturedBypassUrl);
+        console.log('\n🎉 SUCCESS!');
+        console.log('🔗 Captured URL:', capturedBypassUrl);
         updateHtmlFile(capturedBypassUrl);
         return capturedBypassUrl;
-      } else {
-        throw new Error('Failed to capture bypass URL');
       }
-
-    } else {
-      console.log('❌ Could not find the View store button');
-      await page.screenshot({ path: 'error-no-button.png', fullPage: true });
-      const html = await page.content();
-      fs.writeFileSync('page-content.html', html);
-      throw new Error('Could not find View store button');
     }
+    
+    throw new Error('Failed to capture bypass URL');
 
   } catch (error) {
     console.error('❌ Error:', error.message);
@@ -218,7 +185,6 @@ async function regenerateLink() {
 
 function updateHtmlFile(bypassLink) {
   bypassLink = bypassLink.trim().replace(/\\\//g, '/');
-
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -266,9 +232,8 @@ function updateHtmlFile(bypassLink) {
 </body>
 </html>
 <!-- Updated: ${new Date().toISOString()} -->`;
-
   fs.writeFileSync('./index.html', html);
-  console.log('✅ index.html updated successfully!');
+  console.log('✅ Updated index.html');
 }
 
 if (require.main === module) {
@@ -278,7 +243,7 @@ if (require.main === module) {
       process.exit(0);
     })
     .catch((error) => {
-      console.error('❌ Script failed:', error);
+      console.error('❌ Script failed:', error.message);
       process.exit(1);
     });
 }
