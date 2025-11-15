@@ -2,7 +2,29 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 require('dotenv').config();
 
-async function regenerateLink() {
+async function navigateWithRetry(page, url, maxRetries = 3) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      console.log(`🌐 Attempt ${i + 1}/${maxRetries}: Navigating to Shopify...`);
+      await page.goto(url, {
+        waitUntil: 'domcontentloaded',
+        timeout: 180000 // Increased to 180 seconds (3 minutes) for very slow proxies
+      });
+      console.log('✅ Page loaded successfully');
+      return; // Success!
+    } catch (error) {
+      if (i === maxRetries - 1) {
+        console.error(`❌ All ${maxRetries} attempts failed`);
+        throw error; // Last attempt failed, throw error
+      }
+      console.log(`⚠️  Attempt ${i + 1} failed: ${error.message}`);
+      console.log(`⏳ Waiting 10 seconds before retry...`);
+      await page.waitForTimeout(10000); // Wait 10s before retry (increased from 5s)
+    }
+  }
+}
+
+async function regenerateLink(useProxyOverride = null) {
   console.log('🚀 Starting Playwright automation...\n');
 
   const cookiesJson = process.env.SHOPIFY_COOKIES;
@@ -14,7 +36,10 @@ async function regenerateLink() {
   const iproyalUsername = process.env.IPROYAL_ISP_USERNAME;
   const iproyalPassword = process.env.IPROYAL_ISP_PASSWORD;
   
-  const useProxy = isCI && iproyalHost && iproyalPort && iproyalUsername && iproyalPassword;
+  // Allow override: if useProxyOverride is explicitly false, don't use proxy
+  // If null/undefined, use proxy only in CI with credentials
+  const hasProxyCredentials = iproyalHost && iproyalPort && iproyalUsername && iproyalPassword;
+  const useProxy = useProxyOverride !== null ? useProxyOverride : (isCI && hasProxyCredentials);
 
   if (!cookiesJson) {
     throw new Error('Missing SHOPIFY_COOKIES in .env');
@@ -50,18 +75,21 @@ async function regenerateLink() {
 
   console.log(`🍪 Loaded ${validCookies.length} cookies\n`);
 
-  // Launch browser with optional proxy - UPDATED APPROACH
+  // Launch browser with optional proxy
   const launchOptions = {
     headless: isCI,
-    args: []
+    args: [],
+    // Use Playwright's native proxy config (works better on GitHub Actions)
+    ...(useProxy ? {
+      proxy: {
+        server: `http://${iproyalHost}:${iproyalPort}`,
+        username: iproyalUsername,
+        password: iproyalPassword
+      }
+    } : {})
   };
 
   if (useProxy) {
-    // Use Chrome's proxy args instead of Playwright's proxy config
-    // This format works better with authenticated proxies
-    launchOptions.args.push(
-      `--proxy-server=http://${iproyalHost}:${iproyalPort}`
-    );
     console.log(`🌐 Using IPRoyal Static ISP Proxy`);
     console.log(`   Host: ${iproyalHost}`);
     console.log(`   Port: ${iproyalPort}`);
@@ -81,14 +109,7 @@ async function regenerateLink() {
       extraHTTPHeaders: {
         'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      },
-      // Add proxy authentication via HTTP header if using proxy
-      ...(useProxy ? {
-        httpCredentials: {
-          username: iproyalUsername,
-          password: iproyalPassword
-        }
-      } : {})
+      }
     });
 
     await context.addCookies(validCookies);
@@ -140,37 +161,48 @@ async function regenerateLink() {
       } catch (e) {}
     });
 
-    console.log('🌐 Navigating to Shopify...');
-    await page.goto('https://admin.shopify.com/store/trilogyopticdemo/themes', {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000
-    });
+    // Use retry logic for navigation
+    await navigateWithRetry(page, 'https://admin.shopify.com/store/trilogyopticdemo/themes');
 
-    console.log('✅ Page loaded');
-    await page.waitForLoadState('load');
+    console.log('⏳ Waiting for page to fully load...');
+    await page.waitForLoadState('load', { timeout: 60000 });
     await page.waitForTimeout(5000);
     
+    console.log('📸 Taking debug screenshot...');
     await page.screenshot({ path: 'debug-page.png', fullPage: true });
 
     // Try to expand Online Store
+    console.log('🔧 Attempting to expand Online Store section...');
     try {
       const onlineStore = page.locator('text="Online Store"').first();
       if (await onlineStore.count() > 0) {
-        await onlineStore.click({ force: true });
+        await onlineStore.click({ force: true, timeout: 10000 });
         await page.waitForTimeout(2000);
+        console.log('✅ Expanded Online Store section');
       }
-    } catch (e) {}
+    } catch (e) {
+      console.log('ℹ️  Online Store section might already be expanded');
+    }
 
     // Find and click View button
+    console.log('🔍 Looking for View button...');
     const button = page.locator('button[aria-label*="View"], a[aria-label*="View"]').first();
     
     if (await button.count() > 0) {
       console.log('✅ Found View button');
-      await button.scrollIntoViewIfNeeded().catch(() => {});
-      await page.waitForTimeout(500);
-      await button.click({ force: true });
-      console.log('🖱️ Clicked!');
       
+      try {
+        await button.scrollIntoViewIfNeeded({ timeout: 10000 }).catch(() => {});
+        await page.waitForTimeout(500);
+      } catch (e) {
+        console.log('⚠️  Could not scroll to button, attempting click anyway...');
+      }
+      
+      console.log('🖱️  Clicking button...');
+      await button.click({ force: true, timeout: 10000 });
+      console.log('✅ Button clicked!');
+      
+      console.log('⏳ Waiting for response...');
       await page.waitForTimeout(5000);
 
       if (capturedBypassUrl) {
@@ -178,16 +210,22 @@ async function regenerateLink() {
         console.log('🔗 Captured URL:', capturedBypassUrl);
         updateHtmlFile(capturedBypassUrl);
         return capturedBypassUrl;
+      } else {
+        console.log('⚠️  No bypass URL captured after clicking');
+        throw new Error('Failed to capture bypass URL');
       }
+    } else {
+      console.log('❌ Could not find View button');
+      throw new Error('View button not found');
     }
-    
-    throw new Error('Failed to capture bypass URL');
 
   } catch (error) {
     console.error('❌ Error:', error.message);
+    console.error(error.stack);
     throw error;
   } finally {
     await browser.close();
+    console.log('🔒 Browser closed');
   }
 }
 
@@ -240,18 +278,40 @@ function updateHtmlFile(bypassLink) {
 </body>
 </html>
 <!-- Updated: ${new Date().toISOString()} -->`;
+
   fs.writeFileSync('./index.html', html);
   console.log('✅ Updated index.html');
 }
 
 if (require.main === module) {
+  // Try with proxy first (if in CI and credentials exist)
   regenerateLink()
     .then(() => {
-      console.log('✅ Script completed successfully');
+      console.log('\n✅ Script completed successfully');
       process.exit(0);
     })
-    .catch((error) => {
-      console.error('❌ Script failed:', error.message);
-      process.exit(1);
+    .catch(async (error) => {
+      console.error('\n❌ Script failed with proxy:', error.message);
+      
+      // If we were using proxy and it failed, try without proxy as fallback
+      const isCI = process.env.CI === 'true';
+      const hasProxyCredentials = process.env.IPROYAL_ISP_HOST && 
+                                   process.env.IPROYAL_ISP_PORT && 
+                                   process.env.IPROYAL_ISP_USERNAME && 
+                                   process.env.IPROYAL_ISP_PASSWORD;
+      
+      if (isCI && hasProxyCredentials) {
+        console.log('\n🔄 Proxy failed. Trying WITHOUT proxy as fallback...\n');
+        try {
+          await regenerateLink(false); // Explicitly disable proxy
+          console.log('\n✅ Script completed successfully WITHOUT proxy');
+          process.exit(0);
+        } catch (fallbackError) {
+          console.error('\n❌ Fallback also failed:', fallbackError.message);
+          process.exit(1);
+        }
+      } else {
+        process.exit(1);
+      }
     });
 }
