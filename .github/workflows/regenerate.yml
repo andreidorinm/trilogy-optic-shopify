@@ -1,9 +1,9 @@
 name: Regenerate Shopify Bypass Link
 
 on:
-  schedule:
-    - cron: '*/55 * * * *'
-  workflow_dispatch:
+  # schedule:  # ❌ Commented out - no automatic runs
+  #   - cron: '*/55 * * * *'
+  workflow_dispatch:  # ✅ Keep manual trigger only
 
 permissions:
   contents: write
